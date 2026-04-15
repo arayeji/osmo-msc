@@ -321,7 +321,6 @@ static void test_call_mo()
 	EXPECT_CONN_COUNT(0);
 	clear_vlr();
 	comment_end();
-	release_99 = false;
 }
 
 static void test_call_mt()
@@ -458,7 +457,6 @@ static void test_call_mt()
 	EXPECT_CONN_COUNT(0);
 	clear_vlr();
 	comment_end();
-	release_99 = false;
 }
 
 static void test_call_mt2()
@@ -584,7 +582,6 @@ static void test_call_mt2()
 
 	clear_vlr();
 	comment_end();
-	release_99 = false;
 }
 
 static void test_call_mo_to_unknown()
@@ -683,7 +680,6 @@ static void test_call_mo_to_unknown()
 	EXPECT_CONN_COUNT(0);
 	clear_vlr();
 	comment_end();
-	release_99 = false;
 }
 
 static void test_call_mo_to_unknown_timeout()
@@ -783,7 +779,6 @@ static void test_call_mo_to_unknown_timeout()
 	EXPECT_CONN_COUNT(0);
 	clear_vlr();
 	comment_end();
-	release_99 = false;
 }
 
 #define LIST_END 0xffff
@@ -1637,7 +1632,6 @@ static void test_codecs(void)
 	EXPECT_CONN_COUNT(0);
 	clear_vlr();
 	comment_end();
-	release_99 = false;
 }
 
 msc_vlr_test_func_t msc_vlr_tests[] = {

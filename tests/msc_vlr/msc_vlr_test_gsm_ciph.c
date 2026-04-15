@@ -1055,7 +1055,6 @@ static void test_gsm_ciph_in_umts_env()
 	ms_sends_msg("050130"
 		     "089910070000106005" /* IMSI */);
 	VERBOSE_ASSERT(bssap_clear_sent, == true, "%d");
-	release_99 = false;
 
 	ran_sends_clear_complete();
 	EXPECT_CONN_COUNT(0);

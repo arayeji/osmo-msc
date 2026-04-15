@@ -53,7 +53,10 @@ extern bool _log_lines;
 #define btw(fmt, args...) _log("- " fmt, ## args )
 #define log(fmt, args...) _log("  " fmt, ## args )
 
-#define comment_start() fprintf(stderr, "===== %s\n", __func__);
+#define comment_start() do { \
+		fprintf(stderr, "===== %s\n", __func__); \
+		release_99 = false; \
+	} while (false)
 #define comment_end() fprintf(stderr, "===== %s: SUCCESS\n\n", __func__);
 
 extern void *msc_vlr_tests_ctx;
