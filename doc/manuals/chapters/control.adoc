@@ -10,6 +10,12 @@ describes the CTRL interface variables specific to OsmoMSC.
 |===
 |Name|Access|Trap|Value|Comment
 |subscriber-list-active-v1|RO|No||Return list of active subscribers.
+|subscriber-list-active-v2|RO|No||Return extended list of active subscribers.
+|subscriber-detail-v1.<IMSI-or-MSISDN>|RO|No||Return details for a specific subscriber.
+|active-call-list-v1|RO|No||Return list of active voice calls.
+|subscriber-expire|WO|No||Expire a subscriber by IMSI (light detach).
+|subscriber-disconnect-v1|WO|No||Disconnect a subscriber by IMSI or MSISDN.
+|call-disconnect-v1|WO|No||Disconnect an active call by callref.
 |===
 
 === subscriber-list-active-v1
@@ -29,3 +35,83 @@ For example:
 901700000015252,22801
 901700000015253,22802
 ----
+
+=== subscriber-list-active-v2
+
+Return an extended list of attached subscribers. Each line contains:
+
+----
+<IMSI>,<MSISDN>,<TMSI>,<LAC>,<RAN>,<CONNECTED>\n
+----
+
+`CONNECTED` is `1` when the subscriber currently has an active RAN connection,
+otherwise `0`.
+
+=== subscriber-detail-v1.<IMSI-or-MSISDN>
+
+Return key/value details for a specific subscriber, for example:
+
+----
+GET 1 subscriber-detail-v1.901700000015252
+----
+
+Example reply:
+
+----
+imsi=901700000015252
+msisdn=22801
+tmsi=00A1B2C3
+lac=1
+cell_id=1234
+ran=GERAN-A
+lu_complete=1
+connected=1
+paging=0
+active_calls=1
+conn_state=MSC_A_ST_AUTHENTICATED
+conn_lac=1
+conn_cell_id=1234
+----
+
+=== active-call-list-v1
+
+Return a list of active voice calls (CC transactions in `ACTIVE` state).
+Each line contains:
+
+----
+<callref>,<IMSI>,<MSISDN>,<direction>,<state>,<transaction_id>\n
+----
+
+`direction` is `MO` or `MT`. `callref` is a hexadecimal identifier such as
+`0x00001234`.
+
+=== subscriber-expire
+
+Expire a subscriber by IMSI:
+
+----
+SET 1 subscriber-expire 901700000015252
+----
+
+This marks the subscriber as no longer attached. It is a lighter operation than
+`subscriber-disconnect-v1`.
+
+=== subscriber-disconnect-v1
+
+Forcibly disconnect a subscriber by IMSI or MSISDN:
+
+----
+SET 1 subscriber-disconnect-v1 901700000015252
+----
+
+This releases any active RAN connection and expires the subscriber in the VLR.
+
+=== call-disconnect-v1
+
+Disconnect a specific active call by callref:
+
+----
+SET 1 call-disconnect-v1 0x1234
+----
+
+The callref can be given in decimal or hexadecimal (`0x` prefix).
