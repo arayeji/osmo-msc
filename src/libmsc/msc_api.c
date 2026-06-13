@@ -24,6 +24,7 @@
 #include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/neighbor_ident.h>
+#include <osmocom/msc/ran_conn.h>
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/msc/sccp_ran.h>
 #include <osmocom/msc/cell_id_list.h>
