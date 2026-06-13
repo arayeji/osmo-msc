@@ -42,6 +42,7 @@ struct msc_api_conn {
 	struct osmo_stream_srv *srv;
 	char *buf;
 	size_t buf_len;
+	bool closed;
 };
 
 static struct msc_api_state *g_msc_api;
@@ -890,6 +891,24 @@ static void api_conn_detach(struct osmo_stream_srv *srv)
 	api_conn_free(conn);
 }
 
+static void api_conn_close(struct osmo_stream_srv *srv)
+{
+	struct msc_api_conn *conn;
+
+	if (!srv)
+		return;
+
+	conn = osmo_stream_srv_get_data(srv);
+	if (conn) {
+		if (conn->closed)
+			return;
+		conn->closed = true;
+		osmo_stream_srv_set_data(srv, NULL);
+		api_conn_free(conn);
+	}
+	osmo_stream_srv_destroy(srv);
+}
+
 static int api_conn_read_cb(struct osmo_stream_srv *srv, int res, struct msgb *msg)
 {
 	struct msc_api_conn *conn = osmo_stream_srv_get_data(srv);
@@ -897,8 +916,14 @@ static int api_conn_read_cb(struct osmo_stream_srv *srv, int res, struct msgb *m
 	size_t data_len;
 
 	if (res <= 0 || !msg) {
-		api_conn_detach(srv);
+		api_conn_close(srv);
 		return res;
+	}
+
+	if (!conn) {
+		msgb_free(msg);
+		api_conn_close(srv);
+		return -1;
 	}
 
 	data = msgb_data(msg);
@@ -907,7 +932,7 @@ static int api_conn_read_cb(struct osmo_stream_srv *srv, int res, struct msgb *m
 	if (conn->buf_len + data_len > MSC_API_MAX_REQUEST) {
 		api_send_response(srv, 413, "Payload Too Large",
 				  "{\"error\":\"request too large\"}");
-		api_conn_detach(srv);
+		api_conn_close(srv);
 		msgb_free(msg);
 		return -1;
 	}
@@ -922,7 +947,7 @@ static int api_conn_read_cb(struct osmo_stream_srv *srv, int res, struct msgb *m
 		return 0;
 
 	api_handle_request(conn);
-	api_conn_detach(srv);
+	api_conn_close(srv);
 	return 0;
 }
 
