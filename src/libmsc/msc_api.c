@@ -23,8 +23,13 @@
 #include <osmocom/msc/msc_a.h>
 #include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/msub.h>
+#include <osmocom/msc/neighbor_ident.h>
+#include <osmocom/msc/ran_peer.h>
+#include <osmocom/msc/sccp_ran.h>
+#include <osmocom/msc/cell_id_list.h>
 #include <osmocom/msc/transaction.h>
 #include <osmocom/msc/vty.h>
+#include <osmocom/sigtran/sccp_helpers.h>
 #include <osmocom/vty/vty.h>
 #include <osmocom/netif/stream.h>
 #include <osmocom/vlr/vlr.h>
@@ -221,7 +226,165 @@ static void api_parse_request(const char *req, char *method, size_t method_len,
 	path[plen] = '\0';
 }
 
-static char *api_json_subscribers_online(void *ctx, struct gsm_network *net)
+static void api_path_strip_query(char *path, char *query, size_t query_len)
+{
+	char *q = strchr(path, '?');
+
+	query[0] = '\0';
+	if (q) {
+		osmo_strlcpy(query, q + 1, query_len);
+		*q = '\0';
+	}
+}
+
+static bool api_query_get(const char *query, const char *key, char *val, size_t val_len)
+{
+	const char *p;
+	size_t key_len = strlen(key);
+
+	if (!query || !query[0])
+		return false;
+
+	for (p = query; *p;) {
+		const char *amp = strchr(p, '&');
+		const char *eq = strchr(p, '=');
+		size_t seg_len = amp ? (size_t)(amp - p) : strlen(p);
+
+		if (eq && eq < p + seg_len && (size_t)(eq - p) == key_len
+		    && strncmp(p, key, key_len) == 0) {
+			const char *v = eq + 1;
+			size_t vlen = seg_len - key_len - 1;
+
+			if (vlen >= val_len)
+				vlen = val_len - 1;
+			memcpy(val, v, vlen);
+			val[vlen] = '\0';
+			return val[0] != '\0';
+		}
+		p = amp ? amp + 1 : p + strlen(p);
+	}
+	return false;
+}
+
+static bool api_imsi_matches_vsub(const struct vlr_subscr *vsub, const char *filter)
+{
+	if (!filter || !filter[0])
+		return true;
+	if (strcmp(vsub->imsi, filter) == 0)
+		return true;
+	if (vsub->msisdn[0] && strcmp(vsub->msisdn, filter) == 0)
+		return true;
+	return false;
+}
+
+static bool api_valid_subscriber_id(const char *id)
+{
+	const char *p;
+
+	if (!id || !id[0])
+		return false;
+	for (p = id; *p; p++) {
+		if ((*p >= '0' && *p <= '9') || (*p >= 'A' && *p <= 'Z')
+		    || (*p >= 'a' && *p <= 'z') || *p == '+')
+			continue;
+		return false;
+	}
+	return true;
+}
+
+static bool api_subscriber_path_id(const char *rest, const char *suffix, char *id, size_t id_len)
+{
+	size_t suffix_len = strlen(suffix);
+	size_t rest_len = strlen(rest);
+
+	if (rest_len <= suffix_len + 1 || rest[rest_len - suffix_len - 1] != '/')
+		return false;
+	if (strcmp(rest + rest_len - suffix_len, suffix) != 0)
+		return false;
+
+	osmo_strlcpy(id, rest, OSMO_MIN(id_len, rest_len - suffix_len));
+	return api_valid_subscriber_id(id);
+}
+
+static bool api_subscriber_is_online(struct gsm_network *net, const char *id)
+{
+	struct vlr_subscr *vsub;
+	bool online;
+
+	vsub = api_find_vsub(net, id);
+	if (!vsub)
+		return false;
+	online = vsub->lu_complete != 0;
+	vlr_subscr_put(vsub, VSUB_USE_API);
+	return online;
+}
+
+static char *api_json_count(void *ctx, unsigned int count)
+{
+	return talloc_asprintf(ctx, "{\"count\":%u}", count);
+}
+
+static unsigned int api_count_subscribers_online(struct gsm_network *net, const char *filter_imsi)
+{
+	struct vlr_subscr *vsub;
+	unsigned int count = 0;
+
+	if (!net || !net->vlr)
+		return 0;
+
+	llist_for_each_entry(vsub, &net->vlr->subscribers, list) {
+		if (!vsub->lu_complete)
+			continue;
+		if (!api_imsi_matches_vsub(vsub, filter_imsi))
+			continue;
+		count++;
+	}
+	return count;
+}
+
+static unsigned int api_count_active_calls(struct gsm_network *net, const char *filter_imsi)
+{
+	struct gsm_trans *trans;
+	unsigned int count = 0;
+
+	if (!net)
+		return 0;
+
+	llist_for_each_entry(trans, &net->trans_list, entry) {
+		if (trans->type != TRANS_CC || trans->cc.state != GSM_CSTATE_ACTIVE)
+			continue;
+		if (filter_imsi && filter_imsi[0]) {
+			if (!trans->vsub || !api_imsi_matches_vsub(trans->vsub, filter_imsi))
+				continue;
+		}
+		count++;
+	}
+	return count;
+}
+
+static unsigned int api_count_links(struct gsm_network *net)
+{
+	struct ran_peer *rp;
+	const struct neighbor_ident_entry *nie;
+	unsigned int count = 0;
+
+	if (!net)
+		return 0;
+
+	if (net->a.sri) {
+		llist_for_each_entry(rp, &net->a.sri->ran_peers, entry)
+			count++;
+	}
+	if (net->iu.sri) {
+		llist_for_each_entry(rp, &net->iu.sri->ran_peers, entry)
+			count++;
+	}
+	llist_for_each_entry(nie, &net->neighbor_ident_list, entry)
+		count++;
+	return count;
+}
+
+static char *api_json_subscribers_online(void *ctx, struct gsm_network *net, const char *filter_imsi)
 {
 	struct vlr_subscr *vsub;
 	char *json;
@@ -238,6 +401,8 @@ static char *api_json_subscribers_online(void *ctx, struct gsm_network *net)
 
 		if (!vsub->lu_complete)
 			continue;
+		if (!api_imsi_matches_vsub(vsub, filter_imsi))
+			continue;
 
 		msc_a = msc_a_for_vsub(vsub, true);
 		imsi = json_escape(ctx, vsub->imsi);
@@ -246,7 +411,7 @@ static char *api_json_subscribers_online(void *ctx, struct gsm_network *net)
 
 		entry = talloc_asprintf(ctx,
 			"%s{\"imsi\":\"%s\",\"msisdn\":\"%s\",\"tmsi\":\"%08X\","
-			"\"lac\":%u,\"ran\":\"%s\",\"connected\":%s}",
+			"\"lac\":%u,\"ran\":\"%s\",\"state\":\"online\",\"connected\":%s}",
 			first ? "" : ",",
 			imsi, msisdn,
 			vsub->tmsi != GSM_RESERVED_TMSI ? vsub->tmsi : 0,
@@ -312,7 +477,7 @@ static char *api_json_subscriber_detail(void *ctx, struct gsm_network *net, cons
 	return json;
 }
 
-static char *api_json_active_calls(void *ctx, struct gsm_network *net)
+static char *api_json_active_calls(void *ctx, struct gsm_network *net, const char *filter_imsi)
 {
 	struct gsm_trans *trans;
 	char *json;
@@ -325,13 +490,17 @@ static char *api_json_active_calls(void *ctx, struct gsm_network *net)
 	llist_for_each_entry(trans, &net->trans_list, entry) {
 		const char *imsi = "";
 		const char *msisdn = "";
-		char *eimsi, *emsisdn, *state;
+		char *eimsi, *emsisdn;
 		char *entry;
 
 		if (trans->type != TRANS_CC)
 			continue;
 		if (trans->cc.state != GSM_CSTATE_ACTIVE)
 			continue;
+		if (filter_imsi && filter_imsi[0]) {
+			if (!trans->vsub || !api_imsi_matches_vsub(trans->vsub, filter_imsi))
+				continue;
+		}
 
 		if (trans->vsub) {
 			imsi = trans->vsub->imsi;
@@ -340,20 +509,173 @@ static char *api_json_active_calls(void *ctx, struct gsm_network *net)
 
 		eimsi = json_escape(ctx, imsi);
 		emsisdn = json_escape(ctx, msisdn);
-		state = json_escape(ctx, gsm48_cc_state_name(trans->cc.state));
 
 		entry = talloc_asprintf(ctx,
 			"%s{\"callref\":\"0x%08x\",\"imsi\":\"%s\",\"msisdn\":\"%s\","
-			"\"direction\":\"%s\",\"state\":\"%s\",\"transaction_id\":%u}",
+			"\"direction\":\"%s\",\"state\":\"active\",\"transaction_id\":%u}",
 			first ? "" : ",",
 			trans->callref, eimsi, emsisdn,
 			(trans->transaction_id & 0x08) ? "MO" : "MT",
-			state, trans->transaction_id);
+			trans->transaction_id);
 		json = talloc_asprintf_append(json, "%s", entry ? entry : "");
 		first = false;
 	}
 
 	return talloc_asprintf_append(json, "]}");
+}
+
+static unsigned int api_ran_peer_conn_count(const struct ran_peer *rp)
+{
+	struct ran_conn *conn;
+	unsigned int count = 0;
+
+	ran_peer_for_each_ran_conn(conn, rp)
+		count++;
+	return count;
+}
+
+static void api_json_append_ran_peers(void *ctx, char **json, bool *first,
+				      struct sccp_ran_inst *sri)
+{
+	struct ran_peer *rp;
+
+	if (!sri || !sri->sccp || !sri->ran)
+		return;
+
+	llist_for_each_entry(rp, &sri->ran_peers, entry) {
+		const char *addr = osmo_sccp_inst_addr_name(sri->sccp, &rp->peer_addr);
+		char *eaddr = json_escape(ctx, addr);
+		char *state = json_escape(ctx, osmo_fsm_inst_state_name(rp->fi));
+		char *ran = json_escape(ctx, osmo_rat_type_name(sri->ran->type));
+		char *entry;
+
+		entry = talloc_asprintf(ctx,
+			"%s{\"type\":\"ran\",\"ran\":\"%s\",\"address\":\"%s\","
+			"\"state\":\"%s\",\"connections\":%u,\"osmux\":%s}",
+			*first ? "" : ",",
+			ran, eaddr, state, api_ran_peer_conn_count(rp),
+			rp->remote_supports_osmux ? "true" : "false");
+		*json = talloc_asprintf_append(*json, "%s", entry ? entry : "");
+		*first = false;
+	}
+}
+
+static const char *api_neighbor_type_name(enum msc_neighbor_type type)
+{
+	switch (type) {
+	case MSC_NEIGHBOR_TYPE_LOCAL_RAN_PEER:
+		return "local_ran_peer";
+	case MSC_NEIGHBOR_TYPE_REMOTE_MSC:
+		return "remote_msc";
+	default:
+		return "unknown";
+	}
+}
+
+static char *api_json_neighbor_target(void *ctx, const struct neighbor_ident_addr *addr)
+{
+	char tmp[65];
+
+	switch (addr->type) {
+	case MSC_NEIGHBOR_TYPE_LOCAL_RAN_PEER:
+		return json_escape(ctx, addr->local_ran_peer_pc_str);
+	case MSC_NEIGHBOR_TYPE_REMOTE_MSC:
+		osmo_strlcpy(tmp, addr->remote_msc_ipa_name.buf, sizeof(tmp));
+		if (addr->remote_msc_ipa_name.len < sizeof(tmp))
+			tmp[addr->remote_msc_ipa_name.len] = '\0';
+		return json_escape(ctx, tmp);
+	default:
+		return json_escape(ctx, "");
+	}
+}
+
+static char *api_json_cell_id(void *ctx, const struct gsm0808_cell_id *cid)
+{
+	char buf[128];
+
+	switch (cid->id_discr) {
+	case CELL_IDENT_LAC:
+		snprintf(buf, sizeof(buf), "lac:%u", cid->id.lac);
+		break;
+	case CELL_IDENT_LAC_AND_CI:
+		snprintf(buf, sizeof(buf), "lac-ci:%u:%u",
+			 cid->id.lac_and_ci.lac, cid->id.lac_and_ci.ci);
+		break;
+	case CELL_IDENT_WHOLE_GLOBAL:
+		snprintf(buf, sizeof(buf), "cgi:%s-%s:%u:%u",
+			 osmo_mcc_name(cid->id.global.lai.plmn.mcc),
+			 osmo_mnc_name(cid->id.global.lai.plmn.mnc,
+				       cid->id.global.lai.plmn.mnc_3_digits),
+			 cid->id.global.lai.lac,
+			 cid->id.global.cell_identity);
+		break;
+	default:
+		return json_escape(ctx, "unknown");
+	}
+
+	return json_escape(ctx, buf);
+}
+
+static void api_json_append_neighbors(void *ctx, char **json, bool *first,
+				      struct gsm_network *net)
+{
+	const struct neighbor_ident_entry *nie;
+	struct cell_id_list_entry *cie;
+
+	llist_for_each_entry(nie, &net->neighbor_ident_list, entry) {
+		char *ran = json_escape(ctx, osmo_rat_type_name(nie->addr.ran_type));
+		char *target_type = json_escape(ctx, api_neighbor_type_name(nie->addr.type));
+		char *target = api_json_neighbor_target(ctx, &nie->addr);
+		char *cells = talloc_strdup(ctx, "[");
+		bool cell_first = true;
+		char *entry;
+
+		llist_for_each_entry(cie, &nie->cell_ids, entry) {
+			char *cell = api_json_cell_id(ctx, &cie->cell_id);
+			cells = talloc_asprintf_append(cells, "%s\"%s\"",
+						       cell_first ? "" : ",", cell);
+			cell_first = false;
+		}
+		cells = talloc_asprintf_append(cells, "]");
+
+		entry = talloc_asprintf(ctx,
+			"%s{\"type\":\"neighbor\",\"ran\":\"%s\",\"target_type\":\"%s\","
+			"\"target\":\"%s\",\"cells\":%s}",
+			*first ? "" : ",",
+			ran, target_type, target, cells);
+		*json = talloc_asprintf_append(*json, "%s", entry ? entry : "");
+		*first = false;
+	}
+}
+
+static char *api_json_links(void *ctx, struct gsm_network *net)
+{
+	char *json;
+	bool first = true;
+	char *gsup_host;
+	char *ipa_name = NULL;
+
+	json = talloc_strdup(ctx, "{\"links\":[");
+	if (!json)
+		return NULL;
+
+	if (net->a.sri)
+		api_json_append_ran_peers(ctx, &json, &first, net->a.sri);
+	if (net->iu.sri)
+		api_json_append_ran_peers(ctx, &json, &first, net->iu.sri);
+	api_json_append_neighbors(ctx, &json, &first, net);
+
+	gsup_host = json_escape(ctx, net->gsup_server_addr_str ? net->gsup_server_addr_str : "");
+	if (net->msc_ipa_name && net->msc_ipa_name[0])
+		ipa_name = json_escape(ctx, net->msc_ipa_name);
+
+	json = talloc_asprintf_append(json,
+		"],\"services\":{\"gsup_hlr\":{\"host\":\"%s\",\"port\":%u}",
+		gsup_host, net->gsup_server_port);
+	if (ipa_name)
+		json = talloc_asprintf_append(json, ",\"msc_ipa_name\":\"%s\"", ipa_name);
+	json = talloc_asprintf_append(json, "}}");
+	return json;
 }
 
 static int api_disconnect_subscriber(struct gsm_network *net, const char *id)
@@ -395,32 +717,23 @@ static int api_disconnect_call(struct gsm_network *net, const char *callref_str)
 	return 0;
 }
 
-static bool api_valid_subscriber_id(const char *id)
-{
-	const char *p;
-
-	if (!id || !id[0])
-		return false;
-	for (p = id; *p; p++) {
-		if ((*p >= '0' && *p <= '9') || (*p >= 'A' && *p <= 'Z')
-		    || (*p >= 'a' && *p <= 'z') || *p == '+')
-			continue;
-		return false;
-	}
-	return true;
-}
-
 static void api_handle_request(struct msc_api_conn *conn)
 {
 	void *ctx = conn;
 	struct msc_api_state *api = g_msc_api;
 	struct gsm_network *net = api->net;
-	char method[16], path[256];
+	char method[16], path[256], query[256];
+	char query_imsi[64] = "";
+	const char *filter_imsi = NULL;
 	char *auth, *api_token;
 	char *json = NULL;
 	int rc = 0;
 
 	api_parse_request(conn->buf, method, sizeof(method), path, sizeof(path));
+	api_path_strip_query(path, query, sizeof(query));
+	if (api_query_get(query, "imsi", query_imsi, sizeof(query_imsi)))
+		filter_imsi = query_imsi;
+
 	auth = api_header_value_trimmed(ctx, conn->buf, "Authorization");
 	api_token = api_header_value_trimmed(ctx, conn->buf, "X-Api-Token");
 
@@ -430,41 +743,81 @@ static void api_handle_request(struct msc_api_conn *conn)
 		return;
 	}
 
+	if (!strcmp(method, "GET") && !strcmp(path, "/api/subscribers/online/count")) {
+		json = api_json_count(ctx, api_count_subscribers_online(net, filter_imsi));
+		api_send_response(conn->srv, 200, "OK", json);
+		return;
+	}
+
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/subscribers/online")) {
-		json = api_json_subscribers_online(ctx, net);
+		json = api_json_subscribers_online(ctx, net, filter_imsi);
+		api_send_response(conn->srv, 200, "OK", json);
+		return;
+	}
+
+	if (!strcmp(method, "GET") && !strcmp(path, "/api/calls/active/count")) {
+		json = api_json_count(ctx, api_count_active_calls(net, filter_imsi));
 		api_send_response(conn->srv, 200, "OK", json);
 		return;
 	}
 
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/calls/active")) {
-		json = api_json_active_calls(ctx, net);
+		json = api_json_active_calls(ctx, net, filter_imsi);
+		api_send_response(conn->srv, 200, "OK", json);
+		return;
+	}
+
+	if (!strcmp(method, "GET") && !strcmp(path, "/api/links/count")) {
+		json = api_json_count(ctx, api_count_links(net));
+		api_send_response(conn->srv, 200, "OK", json);
+		return;
+	}
+
+	if (!strcmp(method, "GET") && !strcmp(path, "/api/links")) {
+		json = api_json_links(ctx, net);
 		api_send_response(conn->srv, 200, "OK", json);
 		return;
 	}
 
 	if (!strcmp(method, "GET") && !strncmp(path, "/api/subscribers/", 17)) {
 		const char *rest = path + 17;
-		const char *suffix = "/detail";
 		char id[64];
 
-		if (strlen(rest) <= strlen(suffix) || strcmp(rest + strlen(rest) - strlen(suffix), suffix))
-			goto not_found;
-
-		osmo_strlcpy(id, rest, OSMO_MIN(sizeof(id), strlen(rest) - strlen(suffix) + 1));
-		if (!api_valid_subscriber_id(id)) {
-			api_send_response(conn->srv, 400, "Bad Request",
-					  "{\"error\":\"invalid subscriber identifier\"}");
+		if (api_subscriber_path_id(rest, "/calls/active/count", id, sizeof(id))) {
+			json = api_json_count(ctx, api_count_active_calls(net, id));
+			api_send_response(conn->srv, 200, "OK", json);
 			return;
 		}
-
-		json = api_json_subscriber_detail(ctx, net, id);
-		if (!json) {
-			api_send_response(conn->srv, 404, "Not Found",
-					  "{\"error\":\"subscriber not found\"}");
+		if (api_subscriber_path_id(rest, "/calls/active", id, sizeof(id))) {
+			json = api_json_active_calls(ctx, net, id);
+			api_send_response(conn->srv, 200, "OK", json);
 			return;
 		}
-		api_send_response(conn->srv, 200, "OK", json);
-		return;
+		if (api_subscriber_path_id(rest, "/online/count", id, sizeof(id))) {
+			json = api_json_count(ctx, api_subscriber_is_online(net, id) ? 1 : 0);
+			api_send_response(conn->srv, 200, "OK", json);
+			return;
+		}
+		if (api_subscriber_path_id(rest, "/online", id, sizeof(id))) {
+			json = api_json_subscribers_online(ctx, net, id);
+			api_send_response(conn->srv, 200, "OK", json);
+			return;
+		}
+		if (api_subscriber_path_id(rest, "/detail/count", id, sizeof(id))) {
+			json = api_json_count(ctx, api_subscriber_is_online(net, id) ? 1 : 0);
+			api_send_response(conn->srv, 200, "OK", json);
+			return;
+		}
+		if (api_subscriber_path_id(rest, "/detail", id, sizeof(id))) {
+			json = api_json_subscriber_detail(ctx, net, id);
+			if (!json) {
+				api_send_response(conn->srv, 404, "Not Found",
+						  "{\"error\":\"subscriber not found\"}");
+				return;
+			}
+			api_send_response(conn->srv, 200, "OK", json);
+			return;
+		}
 	}
 
 	if (!strcmp(method, "DELETE") && !strncmp(path, "/api/subscribers/", 17)) {
