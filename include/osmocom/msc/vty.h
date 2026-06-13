@@ -25,6 +25,7 @@ enum bsc_vty_node {
 	SMPP_ESME_NODE,
 	HLR_NODE,
 	CFG_SGS_NODE,
+	CFG_API_NODE,
 	SMSC_NODE,
 	ASCI_NODE,
 	GCR_NODE,

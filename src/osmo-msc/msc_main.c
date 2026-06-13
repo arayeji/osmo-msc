@@ -65,6 +65,7 @@
 #include <osmocom/mgcp_client/mgcp_client.h>
 #include <osmocom/msc/sgs_iface.h>
 #include <osmocom/msc/sgs_server.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/ran_infra.h>
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/msc/ran_msg_a.h>
@@ -773,6 +774,13 @@ TODO: we probably want some of the _net_ ctrl commands from bsc_base_ctrl_cmds_i
 	if (sgs_server_open(g_sgs)) {
 		fprintf(stderr, "Starting SGs server failed\n");
 		ret = 9;
+		goto error;
+	}
+
+	if (msc_network->api && msc_api_configured(msc_network->api)
+	    && msc_api_open(msc_network->api) < 0) {
+		fprintf(stderr, "Starting HTTP API failed\n");
+		ret = 12;
 		goto error;
 	}
 

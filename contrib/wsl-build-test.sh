@@ -122,11 +122,11 @@ def delete(path):
 
 online = get("/api/subscribers/online")
 assert "subscribers" in online, online
-print("REST online:", online)
+print("REST proxy online:", online)
 
 calls = get("/api/calls/active")
 assert "calls" in calls, calls
-print("REST calls:", calls)
+print("REST proxy calls:", calls)
 
 try:
     get("/api/subscribers/999999999999999/detail")
@@ -142,7 +142,67 @@ except urllib.error.HTTPError as exc:
     if exc.code != 502:
         raise
 
-print("All REST API smoke tests passed")
+print("All REST proxy smoke tests passed")
+PY
+
+kill "${REST_PID}" 2>/dev/null || true
+wait "${REST_PID}" 2>/dev/null || true
+REST_PID=
+kill "${MSC_PID}" 2>/dev/null || true
+wait "${MSC_PID}" 2>/dev/null || true
+MSC_PID=
+
+API_CFG="/tmp/osmo-msc-api-test.cfg"
+cat >"${API_CFG}" <<EOF
+$(cat "${CFG}")
+msc
+ api
+  port 18081
+  token testtoken
+EOF
+
+"${MSC_BIN}" -c "${API_CFG}" > /tmp/osmo-msc-api-test.log 2>&1 &
+MSC_API_PID=$!
+cleanup() {
+	kill "${REST_PID}" 2>/dev/null || true
+	wait "${REST_PID}" 2>/dev/null || true
+	kill "${MSC_API_PID}" 2>/dev/null || true
+	wait "${MSC_API_PID}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+for _ in $(seq 1 30); do
+	if curl -sf -H "Authorization: Bearer testtoken" "http://127.0.0.1:18081/api/subscribers/online" >/tmp/api-online.json 2>/dev/null; then
+		break
+	fi
+	sleep 1
+done
+
+python3 - <<'PY'
+import json
+import urllib.error
+import urllib.request
+
+def get(path, token=None):
+    headers = {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request("http://127.0.0.1:18081" + path, headers=headers)
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.load(resp)
+
+online = get("/api/subscribers/online", "testtoken")
+assert "subscribers" in online, online
+print("Embedded API online:", online)
+
+try:
+    get("/api/subscribers/online", "wrong")
+    raise SystemExit("expected 401 for bad token")
+except urllib.error.HTTPError as exc:
+    if exc.code != 401:
+        raise
+
+print("All embedded HTTP API smoke tests passed")
 PY
 
 echo "Tests passed"

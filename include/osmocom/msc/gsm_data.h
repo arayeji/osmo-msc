@@ -145,6 +145,8 @@ struct gsm_tz {
 	int dst; /* daylight savings */
 };
 
+struct msc_api_state;
+
 struct gsm_network {
 	/* TODO MSCSPLIT the gsm_network struct is basically a kitchen sink for
 	 * global settings and variables, "madly" mixing BSC and MSC stuff. Split
@@ -198,6 +200,9 @@ struct gsm_network {
 
 	/* control interface */
 	struct ctrl_handle *ctrl;
+
+	/* embedded HTTP/JSON API */
+	struct msc_api_state *api;
 
 	/* if override is nonzero, this timezone data is used for all MM
 	 * contexts. */
