@@ -72,6 +72,7 @@ libmsc_a_SOURCES = \
 	transaction_cc.c \
 	msc_net_init.c \
 	ctrl_commands.c \
+	msc_api.c \
 	sgs_iface.c \
 	sgs_server.c \
 	sgs_vty.c \

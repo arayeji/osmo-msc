@@ -62,6 +62,7 @@
 #include <osmocom/msc/rrlp.h>
 #include <osmocom/vlr/vlr_sgs.h>
 #include <osmocom/msc/sgs_vty.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/sccp_ran.h>
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/msc/ran_infra.h>
@@ -869,6 +870,8 @@ static int config_write_msc(struct vty *vty)
 	osmo_tdef_vty_groups_write(vty, " ");
 
 	msc_write_nri(vty);
+
+	msc_api_config_write(vty);
 
 	return CMD_SUCCESS;
 }
@@ -2175,6 +2178,8 @@ void msc_vty_init(struct gsm_network *msc_network)
 	mgcp_client_vty_init(msc_network, MSC_NODE, msc_network->mgw.conf);
 
 	sgs_vty_init();
+	msc_api_alloc(msc_network, msc_network);
+	msc_api_vty_init();
 	smsc_vty_init(msc_network);
 	asci_vty_init(msc_network);
 
