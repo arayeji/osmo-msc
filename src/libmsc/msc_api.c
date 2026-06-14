@@ -906,7 +906,7 @@ static void api_conn_close(struct osmo_stream_srv *srv)
 		osmo_stream_srv_set_data(srv, NULL);
 		api_conn_free(conn);
 	}
-	osmo_stream_srv_destroy(srv);
+	osmo_stream_srv_set_flush_and_destroy(srv);
 }
 
 static int api_conn_read_cb(struct osmo_stream_srv *srv, int res, struct msgb *msg)
