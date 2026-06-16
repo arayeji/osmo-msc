@@ -15,6 +15,7 @@
 #include <osmocom/core/msgb.h>
 #include <osmocom/core/select.h>
 #include <osmocom/core/socket.h>
+#include <osmocom/core/logging.h>
 #include <osmocom/core/utils.h>
 #include <osmocom/gsm/gsm23003.h>
 #include <osmocom/gsm/protocol/gsm_04_08.h>
@@ -719,6 +720,217 @@ static int api_disconnect_call(struct gsm_network *net, const char *callref_str)
 	return 0;
 }
 
+/* ---- per-IMSI debug trace ----
+ *
+ * Mirrors the `logging filter imsi IMSI` VTY command, but driven over the API:
+ * a dedicated file log target is created per IMSI, set to DEBUG, and pinned to
+ * the subscriber via the VLR filter. The daemon's filter_fn() (msc_main.c) then
+ * routes only that subscriber's log lines into the file. This is the OsmoMSC
+ * equivalent of the Open5GS MME/SGW-C/SMF IMSI trace.
+ */
+
+#define VSUB_USE_API_TRACE "API-trace"
+
+static bool api_valid_imsi(const char *imsi)
+{
+	const char *p;
+	size_t n = 0;
+
+	if (!imsi || !imsi[0])
+		return false;
+	for (p = imsi; *p; p++, n++) {
+		if (*p < '0' || *p > '9')
+			return false;
+	}
+	return n >= 5 && n <= 15;
+}
+
+static struct msc_api_trace *api_trace_find(struct msc_api_state *api, const char *imsi)
+{
+	struct msc_api_trace *t;
+
+	llist_for_each_entry(t, &api->traces, entry) {
+		if (!strcmp(t->imsi, imsi))
+			return t;
+	}
+	return NULL;
+}
+
+static char *api_json_trace(void *ctx, const struct msc_api_trace *t, const char *status)
+{
+	char *imsi = json_escape(ctx, t->imsi);
+
+	return talloc_asprintf(ctx,
+		"{\"status\":\"%s\",\"imsi\":\"%s\",\"output\":\"journal\",\"level\":\"debug\"}",
+		status, imsi);
+}
+
+/* Returns 0 on success (and *out_trace set), negative errno otherwise. */
+static int api_trace_enable(struct msc_api_state *api, const char *imsi,
+			    struct msc_api_trace **out_trace)
+{
+	struct gsm_network *net = api->net;
+	struct vlr_subscr *vsub;
+	struct msc_api_trace *t;
+	struct log_target *tgt;
+
+	t = api_trace_find(api, imsi);
+	if (t) {
+		/* idempotent: trace already running for this IMSI */
+		*out_trace = t;
+		return 0;
+	}
+
+	/* the VLR filter pins to a live subscriber object (pointer identity),
+	 * so the subscriber must already be known to the VLR. */
+	vsub = vlr_subscr_find_by_imsi(net->vlr, imsi, VSUB_USE_API_TRACE);
+	if (!vsub)
+		return -ENOENT;
+
+	t = talloc_zero(api, struct msc_api_trace);
+	if (!t) {
+		vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
+		return -ENOMEM;
+	}
+	osmo_strlcpy(t->imsi, imsi, sizeof(t->imsi));
+
+	/* emit to stderr so the daemon's journald unit captures the lines */
+	tgt = log_target_create_stderr();
+	if (!tgt) {
+		vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
+		talloc_free(t);
+		return -EIO;
+	}
+
+	log_set_log_level(tgt, LOGL_DEBUG);
+	log_set_use_color(tgt, 0);
+	log_set_print_category(tgt, 1);
+	log_set_print_category_hex(tgt, 0);
+	log_set_print_level(tgt, 1);
+	log_set_print_extended_timestamp(tgt, 1);
+	/* pin to this subscriber; the daemon filter_fn() does the matching */
+	log_set_filter_vlr_subscr(tgt, vsub);
+	log_add_target(tgt);
+
+	t->target = tgt;
+	llist_add_tail(&t->entry, &api->traces);
+
+	/* log_set_filter_vlr_subscr took its own ref; drop ours */
+	vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
+
+	LOGP(DMSC, LOGL_NOTICE, "API enabled IMSI debug trace for %s (-> journal)\n", imsi);
+	*out_trace = t;
+	return 0;
+}
+
+static int api_trace_disable(struct msc_api_state *api, const char *imsi)
+{
+	struct msc_api_trace *t = api_trace_find(api, imsi);
+
+	if (!t)
+		return -ENOENT;
+
+	llist_del(&t->entry);
+	if (t->target) {
+		log_set_filter_vlr_subscr(t->target, NULL);
+		log_target_destroy(t->target);
+	}
+	LOGP(DMSC, LOGL_NOTICE, "API disabled IMSI debug trace for %s\n", imsi);
+	talloc_free(t);
+	return 0;
+}
+
+static char *api_json_trace_list(void *ctx, struct msc_api_state *api)
+{
+	struct msc_api_trace *t;
+	char *json = talloc_strdup(ctx, "{\"traces\":[");
+	bool first = true;
+
+	if (!json)
+		return NULL;
+
+	llist_for_each_entry(t, &api->traces, entry) {
+		char *e = api_json_trace(ctx, t, "active");
+
+		json = talloc_asprintf_append(json, "%s%s", first ? "" : ",",
+					      e ? e : "");
+		first = false;
+	}
+	return talloc_asprintf_append(json, "]}");
+}
+
+/* Handle /api/trace[...]. Returns true if the path was a trace route. */
+static bool api_handle_trace(struct msc_api_conn *conn, struct msc_api_state *api,
+			     const char *method, const char *path)
+{
+	void *ctx = conn;
+	char *json;
+	int rc;
+
+	if (!strcmp(method, "GET") && !strcmp(path, "/api/trace")) {
+		json = api_json_trace_list(ctx, api);
+		api_send_response(conn->srv, 200, "OK", json);
+		return true;
+	}
+
+	if (strncmp(path, "/api/trace/", 11) != 0)
+		return false;
+
+	const char *imsi = path + 11;
+	struct msc_api_trace *t;
+
+	if (!api_valid_imsi(imsi)) {
+		api_send_response(conn->srv, 400, "Bad Request",
+				  "{\"error\":\"invalid IMSI\"}");
+		return true;
+	}
+
+	if (!strcmp(method, "POST") || !strcmp(method, "PUT")) {
+		rc = api_trace_enable(api, imsi, &t);
+		if (rc == -ENOENT) {
+			api_send_response(conn->srv, 404, "Not Found",
+					  "{\"error\":\"subscriber not known to VLR; "
+					  "trace can only be attached to an attached subscriber\"}");
+			return true;
+		}
+		if (rc < 0) {
+			api_send_response(conn->srv, 500, "Internal Server Error",
+					  "{\"error\":\"failed to enable trace\"}");
+			return true;
+		}
+		json = api_json_trace(ctx, t, "enabled");
+		api_send_response(conn->srv, 200, "OK", json);
+		return true;
+	}
+
+	if (!strcmp(method, "DELETE")) {
+		rc = api_trace_disable(api, imsi);
+		if (rc == -ENOENT) {
+			api_send_response(conn->srv, 404, "Not Found",
+					  "{\"error\":\"no active trace for this IMSI\"}");
+			return true;
+		}
+		json = talloc_asprintf(ctx, "{\"status\":\"disabled\",\"imsi\":\"%s\"}",
+				       json_escape(ctx, imsi));
+		api_send_response(conn->srv, 200, "OK", json);
+		return true;
+	}
+
+	if (!strcmp(method, "GET")) {
+		t = api_trace_find(api, imsi);
+		if (!t) {
+			api_send_response(conn->srv, 404, "Not Found",
+					  "{\"error\":\"no active trace for this IMSI\"}");
+			return true;
+		}
+		json = api_json_trace(ctx, t, "active");
+		api_send_response(conn->srv, 200, "OK", json);
+		return true;
+	}
+
+	return false;
+}
+
 static void api_handle_request(struct msc_api_conn *conn)
 {
 	void *ctx = conn;
@@ -768,6 +980,9 @@ static void api_handle_request(struct msc_api_conn *conn)
 		api_send_response(conn->srv, 200, "OK", json);
 		return;
 	}
+
+	if (api_handle_trace(conn, api, method, path))
+		return;
 
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/links/count")) {
 		json = api_json_count(ctx, api_count_links(net));
@@ -991,6 +1206,7 @@ struct msc_api_state *msc_api_alloc(void *ctx, struct gsm_network *net)
 
 	api->net = net;
 	api->cfg.port = MSC_API_PORT_DEFAULT;
+	INIT_LLIST_HEAD(&api->traces);
 	osmo_strlcpy(api->cfg.bind_addr, MSC_API_BIND_DEFAULT, sizeof(api->cfg.bind_addr));
 	api->srv_link = osmo_stream_srv_link_create(api);
 	if (!api->srv_link) {
