@@ -16,6 +16,7 @@
 #include <osmocom/core/select.h>
 #include <osmocom/core/socket.h>
 #include <osmocom/core/logging.h>
+#include <osmocom/core/timer.h>
 #include <osmocom/core/utils.h>
 #include <osmocom/gsm/gsm23003.h>
 #include <osmocom/gsm/protocol/gsm_04_08.h>
@@ -327,6 +328,31 @@ static char *api_json_count(void *ctx, unsigned int count)
 	return talloc_asprintf(ctx, "{\"count\":%u}", count);
 }
 
+/* Append configured periodic LU expiry (T3212 CS / T3312 PS) and remaining time. */
+static void api_json_append_lu_expiry(void *ctx, char **json, const struct vlr_subscr *vsub)
+{
+	unsigned long timer_sec = vlr_timer_secs(vsub->vlr, 3212, 3312);
+	const char *timer_name = vlr_is_cs(vsub->vlr) ? "T3212" : "T3312";
+	struct timespec now;
+	long long expires_in = -1;
+
+	if (timer_sec && vsub->expire_lu != VLR_SUBSCRIBER_NO_EXPIRATION
+	    && osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+		if (vsub->expire_lu > (time_t)now.tv_sec)
+			expires_in = vsub->expire_lu - now.tv_sec;
+		else
+			expires_in = 0;
+	}
+
+	*json = talloc_asprintf_append(*json,
+				       ",\"lu_timer\":\"%s\",\"lu_timer_sec\":%lu",
+				       timer_name, timer_sec);
+	if (expires_in >= 0)
+		*json = talloc_asprintf_append(*json, ",\"lu_expires_in_sec\":%lld", expires_in);
+	else
+		*json = talloc_asprintf_append(*json, ",\"lu_expires_in_sec\":null");
+}
+
 static unsigned int api_count_subscribers_online(struct gsm_network *net, const char *filter_imsi)
 {
 	struct vlr_subscr *vsub;
@@ -414,12 +440,16 @@ static char *api_json_subscribers_online(void *ctx, struct gsm_network *net, con
 
 		entry = talloc_asprintf(ctx,
 			"%s{\"imsi\":\"%s\",\"msisdn\":\"%s\",\"tmsi\":\"%08X\","
-			"\"lac\":%u,\"ran\":\"%s\",\"state\":\"online\",\"connected\":%s}",
+			"\"lac\":%u,\"ran\":\"%s\",\"state\":\"online\",\"connected\":%s",
 			first ? "" : ",",
 			imsi, msisdn,
 			vsub->tmsi != GSM_RESERVED_TMSI ? vsub->tmsi : 0,
 			vsub->cgi.lai.lac, ran,
 			msc_a ? "true" : "false");
+		if (entry)
+			api_json_append_lu_expiry(ctx, &entry, vsub);
+		if (entry)
+			entry = talloc_asprintf_append(entry, "}");
 		json = talloc_asprintf_append(json, "%s", entry ? entry : "");
 		first = false;
 	}
@@ -475,6 +505,7 @@ static char *api_json_subscriber_detail(void *ctx, struct gsm_network *net, cons
 			conn_state, msc_a->via_cell.lai.lac, msc_a->via_cell.cell_identity);
 	}
 
+	api_json_append_lu_expiry(ctx, &json, vsub);
 	json = talloc_asprintf_append(json, "}");
 	vlr_subscr_put(vsub, VSUB_USE_API);
 	return json;
