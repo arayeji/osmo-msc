@@ -50,6 +50,8 @@ void gsm48_cc_rx_call_conf_cn_local_rtp_port_known(struct gsm_trans *trans);
 int cc_on_cn_local_rtp_port_known(struct gsm_trans *trans);
 int cc_on_assignment_done(struct gsm_trans *trans);
 
+int mncc_release_ind(struct gsm_network *net, struct gsm_trans *trans,
+		     uint32_t callref, int location, int value);
 int mncc_tx_to_cc(struct gsm_network *net, void *arg);
 
 /* convert a ASCII phone number to call-control BCD */

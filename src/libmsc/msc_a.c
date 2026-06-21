@@ -676,6 +676,18 @@ int msc_a_ensure_cn_local_rtp(struct msc_a *msc_a, struct gsm_trans *cc_trans)
 
 static void assignment_request_timeout_cb(void *data);
 
+/* Abort assignment and tear down the call through CC/MNCC, instead of
+ * call_leg_release() which races with a pending MGCP MDCX on RTP_TO_CN. */
+static void msc_a_abort_assignment(struct msc_a *msc_a, struct gsm_trans *cc_trans)
+{
+	osmo_timer_del(&msc_a->cc.assignment_request_pending);
+	if (cc_trans) {
+		mncc_release_ind(cc_trans->net, cc_trans, cc_trans->callref,
+				 GSM48_CAUSE_LOC_PRN_S_LU,
+				 GSM48_CC_CAUSE_INCOMPAT_DEST);
+	}
+}
+
 /* The MGW has given us a local IP address for the RAN side. Ready to start the Assignment of a voice channel. */
 void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 {
@@ -711,7 +723,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 		if (!cc_trans->cc.local.audio_codecs.count) {
 			LOG_TRANS(cc_trans, LOGL_ERROR, "Assignment not possible, no matching codec: %s\n",
 				  codec_filter_to_str(&cc_trans->cc.codecs, &cc_trans->cc.local, &cc_trans->cc.remote));
-			call_leg_release(msc_a->cc.call_leg);
+			msc_a_abort_assignment(msc_a, cc_trans);
 			return;
 		}
 
@@ -730,7 +742,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 		if (!cc_trans->cc.local.bearer_services.count) {
 			LOG_TRANS(cc_trans, LOGL_ERROR, "Assignment not possible, no matching bearer service: %s\n",
 				  csd_filter_to_str(&cc_trans->cc.csd, &cc_trans->cc.local, &cc_trans->cc.remote));
-			call_leg_release(msc_a->cc.call_leg);
+			msc_a_abort_assignment(msc_a, cc_trans);
 			return;
 		}
 
@@ -745,7 +757,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 	default:
 		LOG_TRANS(cc_trans, LOGL_ERROR, "Assignment not possible for information transfer capability %d\n",
 			  cc_trans->bearer_cap.transfer);
-		call_leg_release(msc_a->cc.call_leg);
+		msc_a_abort_assignment(msc_a, cc_trans);
 		return;
 	}
 
