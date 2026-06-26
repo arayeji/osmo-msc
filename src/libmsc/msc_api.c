@@ -6,7 +6,6 @@
  */
 
 #include <errno.h>
-#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -486,22 +485,27 @@ struct api_sigtran_collect {
 	uint64_t msu_discarded;
 };
 
+static bool api_ctrg_has_counter(const struct rate_ctr_group *ctrg, const char *name)
+{
+	if (!ctrg || !name)
+		return false;
+	return rate_ctr_get_by_name(ctrg, name) != NULL;
+}
+
 static int api_sigtran_collect_group(struct rate_ctr_group *ctrg, void *data)
 {
 	struct api_sigtran_collect *col = data;
-	const char *prefix;
 	const char *name;
 	uint64_t rx, tx, discarded;
 	struct osmo_ss7_asp *asp;
 	bool up;
 
-	if (!ctrg || !ctrg->desc || !ctrg->desc->group_name_prefix || !ctrg->name)
+	if (!ctrg || !ctrg->name)
 		return 0;
 
-	prefix = ctrg->desc->group_name_prefix;
 	name = ctrg->name;
 
-	if (!strcmp(prefix, "asp")) {
+	if (api_ctrg_has_counter(ctrg, "rx:packets:total")) {
 		rx = api_rate_ctr_current(ctrg, "rx:packets:total");
 		tx = api_rate_ctr_current(ctrg, "tx:packets:total");
 		asp = api_find_asp_by_name(name);
@@ -512,17 +516,19 @@ static int api_sigtran_collect_group(struct rate_ctr_group *ctrg, void *data)
 
 		col->asps_json = talloc_asprintf_append(col->asps_json,
 			"%s{\"name\":\"%s\","
-			"\"rx_packets\":%" PRIu64 ","
-			"\"tx_packets\":%" PRIu64 ","
+			"\"rx_packets\":%llu,"
+			"\"tx_packets\":%llu,"
 			"\"up\":%s}",
 			col->first_asp ? "" : ",",
 			json_escape(col->ctx, name),
-			rx, tx, up ? "true" : "false");
+			(unsigned long long)rx,
+			(unsigned long long)tx,
+			up ? "true" : "false");
 		col->first_asp = false;
 		return 0;
 	}
 
-	if (!strcmp(prefix, "as")) {
+	if (api_ctrg_has_counter(ctrg, "rx:msu:total")) {
 		rx = api_rate_ctr_current(ctrg, "rx:msu:total");
 		tx = api_rate_ctr_current(ctrg, "tx:msu:total");
 		discarded = api_rate_ctr_current(ctrg, "rx:msu:discarded");
@@ -535,12 +541,14 @@ static int api_sigtran_collect_group(struct rate_ctr_group *ctrg, void *data)
 
 		col->as_json = talloc_asprintf_append(col->as_json,
 			"%s{\"name\":\"%s\","
-			"\"msu_rx\":%" PRIu64 ","
-			"\"msu_tx\":%" PRIu64 ","
-			"\"msu_discarded\":%" PRIu64 "}",
+			"\"msu_rx\":%llu,"
+			"\"msu_tx\":%llu,"
+			"\"msu_discarded\":%llu}",
 			col->first_as ? "" : ",",
 			json_escape(col->ctx, name),
-			rx, tx, discarded);
+			(unsigned long long)rx,
+			(unsigned long long)tx,
+			(unsigned long long)discarded);
 		col->first_as = false;
 	}
 
@@ -589,13 +597,6 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 	if (sms_statg)
 		sms_pending = api_stat_item_value(sms_statg, "ram:pending");
 
-	sms_ctrg = rate_ctr_get_group_by_name_idx("sms_queue", 0);
-	if (sms_ctrg) {
-		sms_mt_attempted = api_rate_ctr_current(sms_ctrg, "delivery:attempts");
-		sms_mt_failed_paging = api_rate_ctr_current(sms_ctrg, "deliver:paging_timeout");
-		sms_mt_failed_nomem = api_rate_ctr_current(sms_ctrg, "deliver:no_memory");
-	}
-
 	if (net->msc_ctrs) {
 		calls_lu_success = rate_ctr_group_get_ctr(net->msc_ctrs,
 			MSC_CTR_LOC_UPDATE_COMPLETED)->current;
@@ -603,7 +604,15 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 			MSC_CTR_CALL_MO_SETUP)->current;
 		calls_reached_active = rate_ctr_group_get_ctr(net->msc_ctrs,
 			MSC_CTR_CALL_ACTIVE)->current;
+		sms_mt_attempted = rate_ctr_group_get_ctr(net->msc_ctrs,
+			MSC_CTR_SMS_DELIVERED)->current;
+		sms_mt_failed_nomem = rate_ctr_group_get_ctr(net->msc_ctrs,
+			MSC_CTR_SMS_RP_ERR_MEM)->current;
 	}
+
+	sms_ctrg = rate_ctr_get_group_by_name_idx("sms_queue", 0);
+	if (sms_ctrg)
+		sms_mt_failed_paging = api_rate_ctr_current(sms_ctrg, "deliver:paging_timeout");
 
 	sig = (struct api_sigtran_collect) {
 		.ctx = ctx,
@@ -628,19 +637,19 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		"\"active_ss_ussd_sessions\":%d},"
 		"\"sigtran\":{"
 		"\"asp_up\":%u,"
-		"\"msu_discarded\":%" PRIu64 ","
-		"\"msu_rx\":%" PRIu64 ","
-		"\"msu_tx\":%" PRIu64 ","
+		"\"msu_discarded\":%llu,"
+		"\"msu_rx\":%llu,"
+		"\"msu_tx\":%llu,"
 		"\"asps\":%s,"
 		"\"application_servers\":%s},"
 		"\"sms\":{"
-		"\"mt_delivery_attempted\":%" PRIu64 ","
-		"\"mt_delivery_failed_paging\":%" PRIu64 ","
-		"\"mt_delivery_failed_no_memory\":%" PRIu64 "},"
+		"\"mt_delivery_attempted\":%llu,"
+		"\"mt_delivery_failed_paging\":%llu,"
+		"\"mt_delivery_failed_no_memory\":%llu},"
 		"\"calls\":{"
-		"\"lu_success\":%" PRIu64 ","
-		"\"mo_setup\":%" PRIu64 ","
-		"\"reached_active\":%" PRIu64 "}}",
+		"\"lu_success\":%llu,"
+		"\"mo_setup\":%llu,"
+		"\"reached_active\":%llu}}",
 		json_escape(ctx, ts),
 		active_calls,
 		api_count_subscribers_online(net, NULL),
@@ -649,8 +658,17 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		ran_peers_active,
 		ran_peers_total,
 		active_nc_ss,
-		sig.asp_up, sig.msu_discarded, sig.msu_rx, sig.msu_tx,
-		sig.asps_json, sig.as_json);
+		sig.asp_up,
+		(unsigned long long)sig.msu_discarded,
+		(unsigned long long)sig.msu_rx,
+		(unsigned long long)sig.msu_tx,
+		sig.asps_json, sig.as_json,
+		(unsigned long long)sms_mt_attempted,
+		(unsigned long long)sms_mt_failed_paging,
+		(unsigned long long)sms_mt_failed_nomem,
+		(unsigned long long)calls_lu_success,
+		(unsigned long long)calls_mo_setup,
+		(unsigned long long)calls_reached_active);
 
 	return json;
 }
