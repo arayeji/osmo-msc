@@ -455,17 +455,104 @@ static char *api_iso8601_utc(void *ctx)
 	return buf;
 }
 
+static struct osmo_ss7_asp *api_find_asp_by_name(const char *name)
+{
+	struct llist_head *lh;
+	struct osmo_ss7_instance *inst;
+	struct osmo_ss7_asp *asp;
+
+	if (!name || !name[0])
+		return NULL;
+
+	llist_for_each(lh, &osmo_ss7_instances) {
+		inst = osmo_ss7_instances_llist_entry(lh);
+		asp = osmo_ss7_asp_find_by_name(inst, name);
+		if (asp)
+			return asp;
+	}
+
+	return NULL;
+}
+
+struct api_sigtran_collect {
+	void *ctx;
+	char *asps_json;
+	char *as_json;
+	bool first_asp;
+	bool first_as;
+	unsigned int asp_up;
+	uint64_t msu_rx;
+	uint64_t msu_tx;
+	uint64_t msu_discarded;
+};
+
+static int api_sigtran_collect_group(struct rate_ctr_group *ctrg, void *data)
+{
+	struct api_sigtran_collect *col = data;
+	const char *prefix;
+	const char *name;
+	uint64_t rx, tx, discarded;
+	struct osmo_ss7_asp *asp;
+	bool up;
+
+	if (!ctrg || !ctrg->desc || !ctrg->desc->group_name_prefix || !ctrg->name)
+		return 0;
+
+	prefix = ctrg->desc->group_name_prefix;
+	name = ctrg->name;
+
+	if (!strcmp(prefix, "asp")) {
+		rx = api_rate_ctr_current(ctrg, "rx:packets:total");
+		tx = api_rate_ctr_current(ctrg, "tx:packets:total");
+		asp = api_find_asp_by_name(name);
+		up = asp ? osmo_ss7_asp_active(asp) : (rx > 0 || tx > 0);
+
+		if (rx > 0 || tx > 0)
+			col->asp_up++;
+
+		col->asps_json = talloc_asprintf_append(col->asps_json,
+			"%s{\"name\":\"%s\","
+			"\"rx_packets\":%" PRIu64 ","
+			"\"tx_packets\":%" PRIu64 ","
+			"\"up\":%s}",
+			col->first_asp ? "" : ",",
+			json_escape(col->ctx, name),
+			rx, tx, up ? "true" : "false");
+		col->first_asp = false;
+		return 0;
+	}
+
+	if (!strcmp(prefix, "as")) {
+		rx = api_rate_ctr_current(ctrg, "rx:msu:total");
+		tx = api_rate_ctr_current(ctrg, "tx:msu:total");
+		discarded = api_rate_ctr_current(ctrg, "rx:msu:discarded");
+		if (!discarded)
+			discarded = api_rate_ctr_current(ctrg, "rx:packets:unknown");
+
+		col->msu_rx += rx;
+		col->msu_tx += tx;
+		col->msu_discarded += discarded;
+
+		col->as_json = talloc_asprintf_append(col->as_json,
+			"%s{\"name\":\"%s\","
+			"\"msu_rx\":%" PRIu64 ","
+			"\"msu_tx\":%" PRIu64 ","
+			"\"msu_discarded\":%" PRIu64 "}",
+			col->first_as ? "" : ",",
+			json_escape(col->ctx, name),
+			rx, tx, discarded);
+		col->first_as = false;
+	}
+
+	return 0;
+}
+
 static char *api_json_stats(void *ctx, struct gsm_network *net)
 {
-	struct osmo_ss7_instance *ss7;
-	struct osmo_ss7_asp *asp;
-	struct osmo_ss7_as *as;
 	struct rate_ctr_group *sms_ctrg;
 	struct osmo_stat_item_group *sms_statg;
-	char *asps_json, *as_json, *json, *ts;
-	uint64_t sig_msu_rx = 0, sig_msu_tx = 0, sig_msu_discarded = 0;
-	unsigned int sig_asp_up = 0;
-	bool first_asp = true, first_as = true;
+	struct api_sigtran_collect sig;
+	char *json, *ts;
 	int32_t active_calls = 0;
 	int32_t active_nc_ss = 0;
 	int32_t ran_peers_active = 0;
@@ -518,55 +605,16 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 			MSC_CTR_CALL_ACTIVE)->current;
 	}
 
-	asps_json = talloc_strdup(ctx, "[");
-	llist_for_each_entry(ss7, &osmo_ss7_instances, list) {
-		llist_for_each_entry(asp, &ss7->asp_list, list) {
-			uint64_t rx = api_rate_ctr_current(asp->ctrg, "rx:packets:total");
-			uint64_t tx = api_rate_ctr_current(asp->ctrg, "tx:packets:total");
-			bool up = osmo_ss7_asp_active(asp);
-
-			if (rx > 0 || tx > 0)
-				sig_asp_up++;
-
-			asps_json = talloc_asprintf_append(asps_json,
-				"%s{\"name\":\"%s\","
-				"\"rx_packets\":%" PRIu64 ","
-				"\"tx_packets\":%" PRIu64 ","
-				"\"up\":%s}",
-				first_asp ? "" : ",",
-				json_escape(ctx, asp->cfg.name ? asp->cfg.name : ""),
-				rx, tx, up ? "true" : "false");
-			first_asp = false;
-		}
-	}
-	asps_json = talloc_asprintf_append(asps_json, "]");
-
-	as_json = talloc_strdup(ctx, "[");
-	llist_for_each_entry(ss7, &osmo_ss7_instances, list) {
-		llist_for_each_entry(as, &ss7->as_list, list) {
-			uint64_t rx = api_rate_ctr_current(as->ctrg, "rx:msu:total");
-			uint64_t tx = api_rate_ctr_current(as->ctrg, "tx:msu:total");
-			uint64_t discarded = api_rate_ctr_current(as->ctrg, "rx:msu:discarded");
-
-			if (!discarded)
-				discarded = api_rate_ctr_current(as->ctrg, "rx:packets:unknown");
-
-			sig_msu_rx += rx;
-			sig_msu_tx += tx;
-			sig_msu_discarded += discarded;
-
-			as_json = talloc_asprintf_append(as_json,
-				"%s{\"name\":\"%s\","
-				"\"msu_rx\":%" PRIu64 ","
-				"\"msu_tx\":%" PRIu64 ","
-				"\"msu_discarded\":%" PRIu64 "}",
-				first_as ? "" : ",",
-				json_escape(ctx, as->cfg.name ? as->cfg.name : ""),
-				rx, tx, discarded);
-			first_as = false;
-		}
-	}
-	as_json = talloc_asprintf_append(as_json, "]");
+	sig = (struct api_sigtran_collect) {
+		.ctx = ctx,
+		.asps_json = talloc_strdup(ctx, "["),
+		.as_json = talloc_strdup(ctx, "["),
+		.first_asp = true,
+		.first_as = true,
+	};
+	rate_ctr_for_each_group(api_sigtran_collect_group, &sig);
+	sig.asps_json = talloc_asprintf_append(sig.asps_json, "]");
+	sig.as_json = talloc_asprintf_append(sig.as_json, "]");
 
 	json = talloc_asprintf(ctx,
 		"{\"timestamp\":\"%s\","
@@ -601,8 +649,8 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		ran_peers_active,
 		ran_peers_total,
 		active_nc_ss,
-		sig_asp_up, sig_msu_discarded, sig_msu_rx, sig_msu_tx,
-		asps_json, as_json);
+		sig.asp_up, sig.msu_discarded, sig.msu_rx, sig.msu_tx,
+		sig.asps_json, sig.as_json);
 
 	return json;
 }
