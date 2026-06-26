@@ -275,10 +275,73 @@ Error body:
 
 ---
 
+## Dashboard snapshot (PrettyNMS)
+
+Single poll endpoint for MSC dashboard gauges. Prefer this over parallel `/count` + `/links` calls.
+
+```http
+GET /api/stats
+```
+
+Response (all fields optional for forward compatibility):
+
+```json
+{
+  "timestamp": "2026-06-26T12:00:00Z",
+  "active_calls": 0,
+  "online_subscribers": 0,
+  "sms_pending_queue": 0,
+  "vlr": { "subscribers": 0 },
+  "network": {
+    "active_ran_peers": 0,
+    "total_ran_peers_seen": 1,
+    "active_ss_ussd_sessions": 0
+  },
+  "sigtran": {
+    "asp_up": 1,
+    "msu_discarded": 0,
+    "msu_rx": 56,
+    "msu_tx": 97,
+    "asps": [
+      { "name": "asp-stp", "rx_packets": 25176, "tx_packets": 25185, "up": true }
+    ],
+    "application_servers": [
+      { "name": "as-stp", "msu_rx": 56, "msu_tx": 97, "msu_discarded": 0 }
+    ]
+  },
+  "sms": {
+    "mt_delivery_attempted": 0,
+    "mt_delivery_failed_paging": 0,
+    "mt_delivery_failed_no_memory": 0
+  },
+  "calls": {
+    "lu_success": 0,
+    "mo_setup": 0,
+    "reached_active": 0
+  }
+}
+```
+
+| Field | Source |
+|-------|--------|
+| `active_calls` | `msc.active_calls` stat item |
+| `online_subscribers` | VLR subscribers with completed LU (same as `/api/subscribers/online/count`) |
+| `sms_pending_queue` | SMS queue `ram:pending` stat item |
+| `vlr.subscribers` | VLR subscriber count stat item |
+| `network.*` | MSC RAN peer and SS/USSD stat items |
+| `sigtran.*` | libosmo-sigtran ASP/AS rate counters |
+| `sms.*` | SMS queue delivery rate counters |
+| `calls.*` | MSC location-update and call rate counters |
+
+Keep using separate list endpoints for Live / IMSI watch (`/api/subscribers/online`, `/api/calls/active`, etc.).
+
+---
+
 ## PrettyNMS integration summary
 
 | Purpose | Endpoint |
 |---------|----------|
+| **Dashboard snapshot** | `GET /api/stats` |
 | CS online per IMSI | `GET /api/subscribers/online?imsi=<IMSI>` or `GET /api/subscribers/<IMSI>/online` |
 | CS in-call per IMSI | `GET /api/calls/active?imsi=<IMSI>` or `GET /api/subscribers/<IMSI>/calls/active` |
 | Bulk online | `GET /api/subscribers/online` |

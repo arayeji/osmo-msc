@@ -6,16 +6,20 @@
  */
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include <osmocom/core/msgb.h>
+#include <osmocom/core/rate_ctr.h>
 #include <osmocom/core/select.h>
 #include <osmocom/core/socket.h>
 #include <osmocom/core/logging.h>
+#include <osmocom/core/stat_item.h>
 #include <osmocom/core/timer.h>
 #include <osmocom/core/utils.h>
 #include <osmocom/gsm/gsm23003.h>
@@ -32,6 +36,7 @@
 #include <osmocom/msc/cell_id_list.h>
 #include <osmocom/msc/transaction.h>
 #include <osmocom/msc/vty.h>
+#include <osmocom/sigtran/osmo_ss7.h>
 #include <osmocom/sigtran/sccp_helpers.h>
 #include <osmocom/vty/vty.h>
 #include <osmocom/netif/stream.h>
@@ -411,6 +416,195 @@ static unsigned int api_count_links(struct gsm_network *net)
 	llist_for_each_entry(nie, &net->neighbor_ident_list, entry)
 		count++;
 	return count;
+}
+
+static uint64_t api_rate_ctr_current(const struct rate_ctr_group *ctrg, const char *name)
+{
+	const struct rate_ctr *ctr;
+
+	if (!ctrg || !name)
+		return 0;
+	ctr = rate_ctr_get_by_name(ctrg, name);
+	return ctr ? ctr->current : 0;
+}
+
+static int32_t api_stat_item_value(const struct osmo_stat_item_group *statg,
+				   const char *name)
+{
+	const struct osmo_stat_item *item;
+
+	if (!statg || !name)
+		return 0;
+	item = osmo_stat_item_get_by_name(statg, name);
+	return item ? osmo_stat_item_get_last(item) : 0;
+}
+
+static char *api_iso8601_utc(void *ctx)
+{
+	time_t now = time(NULL);
+	struct tm tm;
+	char *buf;
+
+	if (now == (time_t)-1 || !gmtime_r(&now, &tm))
+		return talloc_strdup(ctx, "");
+
+	buf = talloc_array(ctx, char, 32);
+	if (!buf)
+		return talloc_strdup(ctx, "");
+	strftime(buf, 32, "%Y-%m-%dT%H:%M:%SZ", &tm);
+	return buf;
+}
+
+static char *api_json_stats(void *ctx, struct gsm_network *net)
+{
+	struct osmo_ss7_instance *ss7;
+	struct osmo_ss7_asp *asp;
+	struct osmo_ss7_as *as;
+	struct rate_ctr_group *sms_ctrg;
+	struct osmo_stat_item_group *sms_statg;
+	char *asps_json, *as_json, *json, *ts;
+	uint64_t sig_msu_rx = 0, sig_msu_tx = 0, sig_msu_discarded = 0;
+	unsigned int sig_asp_up = 0;
+	bool first_asp = true, first_as = true;
+	int32_t active_calls = 0;
+	int32_t active_nc_ss = 0;
+	int32_t ran_peers_active = 0;
+	int32_t ran_peers_total = 0;
+	int32_t vlr_subscribers = 0;
+	int32_t sms_pending = 0;
+	uint64_t sms_mt_attempted = 0;
+	uint64_t sms_mt_failed_paging = 0;
+	uint64_t sms_mt_failed_nomem = 0;
+	uint64_t calls_lu_success = 0;
+	uint64_t calls_mo_setup = 0;
+	uint64_t calls_reached_active = 0;
+
+	if (!net)
+		return talloc_strdup(ctx, "{}");
+
+	ts = api_iso8601_utc(ctx);
+
+	if (net->statg) {
+		active_calls = osmo_stat_item_get_last(
+			osmo_stat_item_group_get_item(net->statg, MSC_STAT_ACTIVE_CALLS));
+		active_nc_ss = osmo_stat_item_get_last(
+			osmo_stat_item_group_get_item(net->statg, MSC_STAT_ACTIVE_NC_SS));
+		ran_peers_active = osmo_stat_item_get_last(
+			osmo_stat_item_group_get_item(net->statg, MSC_STAT_RAN_PEERS_ACTIVE));
+		ran_peers_total = osmo_stat_item_get_last(
+			osmo_stat_item_group_get_item(net->statg, MSC_STAT_RAN_PEERS_TOTAL));
+	}
+
+	if (net->vlr && net->vlr->statg)
+		vlr_subscribers = api_stat_item_value(net->vlr->statg, "subscribers");
+
+	sms_statg = osmo_stat_item_get_group_by_name_idxname("sms_queue", NULL);
+	if (sms_statg)
+		sms_pending = api_stat_item_value(sms_statg, "ram:pending");
+
+	sms_ctrg = rate_ctr_get_group_by_name_idx("sms_queue", 0);
+	if (sms_ctrg) {
+		sms_mt_attempted = api_rate_ctr_current(sms_ctrg, "delivery:attempts");
+		sms_mt_failed_paging = api_rate_ctr_current(sms_ctrg, "deliver:paging_timeout");
+		sms_mt_failed_nomem = api_rate_ctr_current(sms_ctrg, "deliver:no_memory");
+	}
+
+	if (net->msc_ctrs) {
+		calls_lu_success = rate_ctr_group_get_ctr(net->msc_ctrs,
+			MSC_CTR_LOC_UPDATE_COMPLETED)->current;
+		calls_mo_setup = rate_ctr_group_get_ctr(net->msc_ctrs,
+			MSC_CTR_CALL_MO_SETUP)->current;
+		calls_reached_active = rate_ctr_group_get_ctr(net->msc_ctrs,
+			MSC_CTR_CALL_ACTIVE)->current;
+	}
+
+	asps_json = talloc_strdup(ctx, "[");
+	llist_for_each_entry(ss7, &osmo_ss7_instances, list) {
+		llist_for_each_entry(asp, &ss7->asp_list, list) {
+			uint64_t rx = api_rate_ctr_current(asp->ctrg, "rx:packets:total");
+			uint64_t tx = api_rate_ctr_current(asp->ctrg, "tx:packets:total");
+			bool up = osmo_ss7_asp_active(asp);
+
+			if (rx > 0 || tx > 0)
+				sig_asp_up++;
+
+			asps_json = talloc_asprintf_append(asps_json,
+				"%s{\"name\":\"%s\","
+				"\"rx_packets\":%" PRIu64 ","
+				"\"tx_packets\":%" PRIu64 ","
+				"\"up\":%s}",
+				first_asp ? "" : ",",
+				json_escape(ctx, asp->cfg.name ? asp->cfg.name : ""),
+				rx, tx, up ? "true" : "false");
+			first_asp = false;
+		}
+	}
+	asps_json = talloc_asprintf_append(asps_json, "]");
+
+	as_json = talloc_strdup(ctx, "[");
+	llist_for_each_entry(ss7, &osmo_ss7_instances, list) {
+		llist_for_each_entry(as, &ss7->as_list, list) {
+			uint64_t rx = api_rate_ctr_current(as->ctrg, "rx:msu:total");
+			uint64_t tx = api_rate_ctr_current(as->ctrg, "tx:msu:total");
+			uint64_t discarded = api_rate_ctr_current(as->ctrg, "rx:msu:discarded");
+
+			if (!discarded)
+				discarded = api_rate_ctr_current(as->ctrg, "rx:packets:unknown");
+
+			sig_msu_rx += rx;
+			sig_msu_tx += tx;
+			sig_msu_discarded += discarded;
+
+			as_json = talloc_asprintf_append(as_json,
+				"%s{\"name\":\"%s\","
+				"\"msu_rx\":%" PRIu64 ","
+				"\"msu_tx\":%" PRIu64 ","
+				"\"msu_discarded\":%" PRIu64 "}",
+				first_as ? "" : ",",
+				json_escape(ctx, as->cfg.name ? as->cfg.name : ""),
+				rx, tx, discarded);
+			first_as = false;
+		}
+	}
+	as_json = talloc_asprintf_append(as_json, "]");
+
+	json = talloc_asprintf(ctx,
+		"{\"timestamp\":\"%s\","
+		"\"active_calls\":%d,"
+		"\"online_subscribers\":%u,"
+		"\"sms_pending_queue\":%d,"
+		"\"vlr\":{\"subscribers\":%d},"
+		"\"network\":{"
+		"\"active_ran_peers\":%d,"
+		"\"total_ran_peers_seen\":%d,"
+		"\"active_ss_ussd_sessions\":%d},"
+		"\"sigtran\":{"
+		"\"asp_up\":%u,"
+		"\"msu_discarded\":%" PRIu64 ","
+		"\"msu_rx\":%" PRIu64 ","
+		"\"msu_tx\":%" PRIu64 ","
+		"\"asps\":%s,"
+		"\"application_servers\":%s},"
+		"\"sms\":{"
+		"\"mt_delivery_attempted\":%" PRIu64 ","
+		"\"mt_delivery_failed_paging\":%" PRIu64 ","
+		"\"mt_delivery_failed_no_memory\":%" PRIu64 "},"
+		"\"calls\":{"
+		"\"lu_success\":%" PRIu64 ","
+		"\"mo_setup\":%" PRIu64 ","
+		"\"reached_active\":%" PRIu64 "}}",
+		json_escape(ctx, ts),
+		active_calls,
+		api_count_subscribers_online(net, NULL),
+		sms_pending,
+		vlr_subscribers,
+		ran_peers_active,
+		ran_peers_total,
+		active_nc_ss,
+		sig_asp_up, sig_msu_discarded, sig_msu_rx, sig_msu_tx,
+		asps_json, as_json);
+
+	return json;
 }
 
 static char *api_json_subscribers_online(void *ctx, struct gsm_network *net, const char *filter_imsi)
@@ -985,6 +1179,12 @@ static void api_handle_request(struct msc_api_conn *conn)
 	if (!api_token_valid(api, auth, api_token)) {
 		api_send_response(conn->srv, 401, "Unauthorized",
 				  "{\"error\":\"invalid or missing API token\"}");
+		return;
+	}
+
+	if (!strcmp(method, "GET") && !strcmp(path, "/api/stats")) {
+		json = api_json_stats(ctx, net);
+		api_send_response(conn->srv, 200, "OK", json);
 		return;
 	}
 
