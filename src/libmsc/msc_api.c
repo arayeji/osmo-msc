@@ -43,6 +43,8 @@
 
 #define VSUB_USE_API "API"
 #define MSC_API_MAX_REQUEST 8192
+/* msgb_alloc() size is uint16_t; keep chunks below 64k. */
+#define MSC_API_MSGB_CHUNK 60000
 
 struct msc_api_conn {
 	struct osmo_stream_srv *srv;
@@ -112,35 +114,46 @@ static char *json_escape(void *ctx, const char *str)
 	return out;
 }
 
-static void api_append_msgb_str(struct msgb *msg, const char *str)
-{
-	size_t len = strlen(str);
-	memcpy(msgb_put(msg, len), str, len);
-}
-
 static int api_send_response(struct osmo_stream_srv *conn, int status,
 			     const char *status_text, const char *json_body)
 {
-	struct msgb *msg;
 	const char *body = json_body ? json_body : "";
 	size_t body_len = strlen(body);
+	size_t hdr_len, off;
 	char hdr[256];
+	struct msgb *msg;
 
-	snprintf(hdr, sizeof(hdr),
-		 "HTTP/1.0 %d %s\r\n"
-		 "Content-Type: application/json\r\n"
-		 "Content-Length: %zu\r\n"
-		 "Connection: close\r\n"
-		 "\r\n",
-		 status, status_text, body_len);
+	hdr_len = snprintf(hdr, sizeof(hdr),
+			   "HTTP/1.0 %d %s\r\n"
+			   "Content-Type: application/json\r\n"
+			   "Content-Length: %zu\r\n"
+			   "Connection: close\r\n"
+			   "\r\n",
+			   status, status_text, body_len);
+	if (hdr_len >= sizeof(hdr))
+		return -EINVAL;
 
-	msg = msgb_alloc(strlen(hdr) + body_len + 1, "msc_api_http");
+	msg = msgb_alloc(hdr_len + 1, "msc_api_http");
 	if (!msg)
 		return -ENOMEM;
 
-	api_append_msgb_str(msg, hdr);
-	api_append_msgb_str(msg, body);
+	memcpy(msgb_put(msg, hdr_len), hdr, hdr_len);
 	osmo_stream_srv_send(conn, msg);
+
+	for (off = 0; off < body_len; off += MSC_API_MSGB_CHUNK) {
+		size_t chunk = body_len - off;
+
+		if (chunk > MSC_API_MSGB_CHUNK)
+			chunk = MSC_API_MSGB_CHUNK;
+
+		msg = msgb_alloc(chunk + 1, "msc_api_http");
+		if (!msg)
+			return -ENOMEM;
+
+		memcpy(msgb_put(msg, chunk), body + off, chunk);
+		osmo_stream_srv_send(conn, msg);
+	}
+
 	return 0;
 }
 
