@@ -6,6 +6,7 @@
  */
 
 #include <errno.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +46,8 @@
 #define MSC_API_MAX_REQUEST 8192
 /* msgb_alloc() size is uint16_t; keep chunks below 64k. */
 #define MSC_API_MSGB_CHUNK 60000
+/* Reject oversized bulk JSON before send (PrettyNMS should use /api/stats). */
+#define MSC_API_MAX_JSON_BYTES (256 * 1024)
 
 struct msc_api_conn {
 	struct osmo_stream_srv *srv;
@@ -155,6 +158,82 @@ static int api_send_response(struct osmo_stream_srv *conn, int status,
 	}
 
 	return 0;
+}
+
+static void api_reply_json(struct osmo_stream_srv *srv, char *json)
+{
+	if (json && strlen(json) > MSC_API_MAX_JSON_BYTES) {
+		LOGP(DMSC, LOGL_NOTICE, "HTTP API response too large (%zu bytes)\n",
+		     strlen(json));
+		api_send_response(srv, 413, "Payload Too Large",
+				  "{\"error\":\"response too large; use /api/stats for dashboard polling\"}");
+		return;
+	}
+	api_send_response(srv, 200, "OK", json);
+}
+
+struct api_json_buf {
+	void *ctx;
+	char *data;
+	size_t len;
+	size_t cap;
+};
+
+static int api_json_buf_grow(struct api_json_buf *jb, size_t need)
+{
+	if (!jb->data)
+		return -ENOMEM;
+	if (jb->len + need + 1 <= jb->cap)
+		return 0;
+	while (jb->len + need + 1 > jb->cap)
+		jb->cap *= 2;
+	jb->data = talloc_realloc(jb->ctx, jb->data, char, jb->cap);
+	if (!jb->data)
+		return -ENOMEM;
+	return 0;
+}
+
+static int api_json_buf_append(struct api_json_buf *jb, const char *str)
+{
+	size_t sl;
+
+	if (!str)
+		return -ENOMEM;
+	sl = strlen(str);
+	if (api_json_buf_grow(jb, sl) < 0)
+		return -ENOMEM;
+	memcpy(jb->data + jb->len, str, sl);
+	jb->len += sl;
+	jb->data[jb->len] = '\0';
+	return 0;
+}
+
+static int api_json_buf_init(struct api_json_buf *jb, void *ctx, const char *start)
+{
+	jb->ctx = ctx;
+	jb->cap = 4096;
+	jb->len = 0;
+	jb->data = talloc_size(ctx, jb->cap);
+	if (!jb->data)
+		return -ENOMEM;
+	jb->data[0] = '\0';
+	return api_json_buf_append(jb, start);
+}
+
+static int api_json_buf_append_va(struct api_json_buf *jb, const char *fmt, ...)
+{
+	char *tmp;
+	va_list ap;
+	int rc;
+
+	va_start(ap, fmt);
+	tmp = talloc_vasprintf(jb->ctx, fmt, ap);
+	va_end(ap);
+	if (!tmp)
+		return -ENOMEM;
+	rc = api_json_buf_append(jb, tmp);
+	talloc_free(tmp);
+	return rc;
 }
 
 static const char *api_header_value(const char *req, const char *name)
@@ -370,6 +449,29 @@ static void api_json_append_lu_expiry(void *ctx, char **json, const struct vlr_s
 		*json = talloc_asprintf_append(*json, ",\"lu_expires_in_sec\":null");
 }
 
+static void api_json_buf_append_lu_expiry(struct api_json_buf *jb, const struct vlr_subscr *vsub)
+{
+	unsigned long timer_sec = vlr_timer_secs(vsub->vlr, 3212, 3312);
+	const char *timer_name = vlr_is_cs(vsub->vlr) ? "T3212" : "T3312";
+	struct timespec now;
+	long long expires_in = -1;
+
+	if (timer_sec && vsub->expire_lu != VLR_SUBSCRIBER_NO_EXPIRATION
+	    && osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+		if (vsub->expire_lu > (time_t)now.tv_sec)
+			expires_in = vsub->expire_lu - now.tv_sec;
+		else
+			expires_in = 0;
+	}
+
+	api_json_buf_append_va(jb, ",\"lu_timer\":\"%s\",\"lu_timer_sec\":%lu",
+			      timer_name, timer_sec);
+	if (expires_in >= 0)
+		api_json_buf_append_va(jb, ",\"lu_expires_in_sec\":%lld", expires_in);
+	else
+		api_json_buf_append(jb, ",\"lu_expires_in_sec\":null");
+}
+
 static unsigned int api_count_subscribers_online(struct gsm_network *net, const char *filter_imsi)
 {
 	struct vlr_subscr *vsub;
@@ -486,6 +588,25 @@ static struct osmo_ss7_asp *api_find_asp_by_name(const char *name)
 	return NULL;
 }
 
+static struct osmo_ss7_as *api_find_as_by_name(const char *name)
+{
+	struct llist_head *lh;
+	struct osmo_ss7_instance *inst;
+	struct osmo_ss7_as *as;
+
+	if (!name || !name[0])
+		return NULL;
+
+	llist_for_each(lh, &osmo_ss7_instances) {
+		inst = osmo_ss7_instances_llist_entry(lh);
+		as = osmo_ss7_as_find_by_name(inst, name);
+		if (as)
+			return as;
+	}
+
+	return NULL;
+}
+
 struct api_sigtran_collect {
 	void *ctx;
 	char *asps_json;
@@ -519,10 +640,13 @@ static int api_sigtran_collect_group(struct rate_ctr_group *ctrg, void *data)
 	name = ctrg->name;
 
 	if (api_ctrg_has_counter(ctrg, "rx:packets:total")) {
+		asp = api_find_asp_by_name(name);
+		if (!asp)
+			return 0;
+
 		rx = api_rate_ctr_current(ctrg, "rx:packets:total");
 		tx = api_rate_ctr_current(ctrg, "tx:packets:total");
-		asp = api_find_asp_by_name(name);
-		up = asp ? osmo_ss7_asp_active(asp) : (rx > 0 || tx > 0);
+		up = osmo_ss7_asp_active(asp);
 
 		if (rx > 0 || tx > 0)
 			col->asp_up++;
@@ -542,6 +666,9 @@ static int api_sigtran_collect_group(struct rate_ctr_group *ctrg, void *data)
 	}
 
 	if (api_ctrg_has_counter(ctrg, "rx:msu:total")) {
+		if (!api_find_as_by_name(name))
+			return 0;
+
 		rx = api_rate_ctr_current(ctrg, "rx:msu:total");
 		tx = api_rate_ctr_current(ctrg, "tx:msu:total");
 		discarded = api_rate_ctr_current(ctrg, "rx:msu:discarded");
@@ -689,17 +816,17 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 static char *api_json_subscribers_online(void *ctx, struct gsm_network *net, const char *filter_imsi)
 {
 	struct vlr_subscr *vsub;
-	char *json;
+	struct api_json_buf jb;
 	bool first = true;
 
-	json = talloc_strdup(ctx, "{\"subscribers\":[");
-	if (!json || !net || !net->vlr)
+	if (!net || !net->vlr)
 		return talloc_asprintf(ctx, "{\"subscribers\":[]}");
+	if (api_json_buf_init(&jb, ctx, "{\"subscribers\":[") < 0)
+		return NULL;
 
 	llist_for_each_entry(vsub, &net->vlr->subscribers, list) {
 		struct msc_a *msc_a;
 		char *imsi, *msisdn, *ran;
-		char *entry;
 
 		if (!vsub->lu_complete)
 			continue;
@@ -711,24 +838,24 @@ static char *api_json_subscribers_online(void *ctx, struct gsm_network *net, con
 		msisdn = json_escape(ctx, vsub->msisdn);
 		ran = json_escape(ctx, osmo_rat_type_name(vsub->cs.attached_via_ran));
 
-		entry = talloc_asprintf(ctx,
+		if (api_json_buf_append_va(&jb,
 			"%s{\"imsi\":\"%s\",\"msisdn\":\"%s\",\"tmsi\":\"%08X\","
 			"\"lac\":%u,\"ran\":\"%s\",\"state\":\"online\",\"connected\":%s",
 			first ? "" : ",",
 			imsi, msisdn,
 			vsub->tmsi != GSM_RESERVED_TMSI ? vsub->tmsi : 0,
 			vsub->cgi.lai.lac, ran,
-			msc_a ? "true" : "false");
-		if (entry)
-			api_json_append_lu_expiry(ctx, &entry, vsub);
-		if (entry)
-			entry = talloc_asprintf_append(entry, "}");
-		json = talloc_asprintf_append(json, "%s", entry ? entry : "");
+			msc_a ? "true" : "false") < 0)
+			return NULL;
+		api_json_buf_append_lu_expiry(&jb, vsub);
+		if (api_json_buf_append(&jb, "}") < 0)
+			return NULL;
 		first = false;
 	}
 
-	json = talloc_asprintf_append(json, "]}");
-	return json;
+	if (api_json_buf_append(&jb, "]}") < 0)
+		return NULL;
+	return jb.data;
 }
 
 static char *api_json_subscriber_detail(void *ctx, struct gsm_network *net, const char *id)
@@ -787,18 +914,16 @@ static char *api_json_subscriber_detail(void *ctx, struct gsm_network *net, cons
 static char *api_json_active_calls(void *ctx, struct gsm_network *net, const char *filter_imsi)
 {
 	struct gsm_trans *trans;
-	char *json;
+	struct api_json_buf jb;
 	bool first = true;
 
-	json = talloc_strdup(ctx, "{\"calls\":[");
-	if (!json)
+	if (api_json_buf_init(&jb, ctx, "{\"calls\":[") < 0)
 		return NULL;
 
 	llist_for_each_entry(trans, &net->trans_list, entry) {
 		const char *imsi = "";
 		const char *msisdn = "";
 		char *eimsi, *emsisdn;
-		char *entry;
 
 		if (trans->type != TRANS_CC)
 			continue;
@@ -817,18 +942,20 @@ static char *api_json_active_calls(void *ctx, struct gsm_network *net, const cha
 		eimsi = json_escape(ctx, imsi);
 		emsisdn = json_escape(ctx, msisdn);
 
-		entry = talloc_asprintf(ctx,
+		if (api_json_buf_append_va(&jb,
 			"%s{\"callref\":\"0x%08x\",\"imsi\":\"%s\",\"msisdn\":\"%s\","
 			"\"direction\":\"%s\",\"state\":\"active\",\"transaction_id\":%u}",
 			first ? "" : ",",
 			trans->callref, eimsi, emsisdn,
 			(trans->transaction_id & 0x08) ? "MO" : "MT",
-			trans->transaction_id);
-		json = talloc_asprintf_append(json, "%s", entry ? entry : "");
+			trans->transaction_id) < 0)
+			return NULL;
 		first = false;
 	}
 
-	return talloc_asprintf_append(json, "]}");
+	if (api_json_buf_append(&jb, "]}") < 0)
+		return NULL;
+	return jb.data;
 }
 
 static unsigned int api_ran_peer_conn_count(const struct ran_peer *rp)
@@ -1275,7 +1402,7 @@ static void api_handle_request(struct msc_api_conn *conn)
 
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/subscribers/online")) {
 		json = api_json_subscribers_online(ctx, net, filter_imsi);
-		api_send_response(conn->srv, 200, "OK", json);
+		api_reply_json(conn->srv, json);
 		return;
 	}
 
@@ -1287,7 +1414,7 @@ static void api_handle_request(struct msc_api_conn *conn)
 
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/calls/active")) {
 		json = api_json_active_calls(ctx, net, filter_imsi);
-		api_send_response(conn->srv, 200, "OK", json);
+		api_reply_json(conn->srv, json);
 		return;
 	}
 
@@ -1302,7 +1429,7 @@ static void api_handle_request(struct msc_api_conn *conn)
 
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/links")) {
 		json = api_json_links(ctx, net);
-		api_send_response(conn->srv, 200, "OK", json);
+		api_reply_json(conn->srv, json);
 		return;
 	}
 
@@ -1317,7 +1444,7 @@ static void api_handle_request(struct msc_api_conn *conn)
 		}
 		if (api_subscriber_path_id(rest, "/calls/active", id, sizeof(id))) {
 			json = api_json_active_calls(ctx, net, id);
-			api_send_response(conn->srv, 200, "OK", json);
+			api_reply_json(conn->srv, json);
 			return;
 		}
 		if (api_subscriber_path_id(rest, "/online/count", id, sizeof(id))) {
@@ -1327,7 +1454,7 @@ static void api_handle_request(struct msc_api_conn *conn)
 		}
 		if (api_subscriber_path_id(rest, "/online", id, sizeof(id))) {
 			json = api_json_subscribers_online(ctx, net, id);
-			api_send_response(conn->srv, 200, "OK", json);
+			api_reply_json(conn->srv, json);
 			return;
 		}
 		if (api_subscriber_path_id(rest, "/detail/count", id, sizeof(id))) {
