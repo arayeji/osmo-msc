@@ -51,8 +51,8 @@ Response:
 {
   "subscribers": [
     {
-      "imsi": "999704281565023",
-      "msisdn": "989123456789",
+      "imsi": "001010123456789",
+      "msisdn": "1234567890",
       "lac": 1234,
       "tmsi": "00A1B2C3",
       "ran": "UTRAN-Iu",
@@ -129,8 +129,8 @@ Response:
   "calls": [
     {
       "callref": "0x00001234",
-      "imsi": "999704281565023",
-      "msisdn": "989123456789",
+      "imsi": "001010123456789",
+      "msisdn": "1234567890",
       "direction": "MO",
       "state": "active",
       "transaction_id": 1
@@ -241,16 +241,16 @@ AUTH="Authorization: Bearer $TOKEN"
 curl -s -H "$AUTH" "$HOST/api/subscribers/online"
 
 # Per-IMSI online (PrettyNMS)
-curl -s -H "$AUTH" "$HOST/api/subscribers/online?imsi=999704281565023"
-curl -s -H "$AUTH" "$HOST/api/subscribers/999704281565023/online"
+curl -s -H "$AUTH" "$HOST/api/subscribers/online?imsi=001010123456789"
+curl -s -H "$AUTH" "$HOST/api/subscribers/001010123456789/online"
 
 # Per-IMSI in-call (PrettyNMS)
-curl -s -H "$AUTH" "$HOST/api/calls/active?imsi=999704281565023"
-curl -s -H "$AUTH" "$HOST/api/subscribers/999704281565023/calls/active"
+curl -s -H "$AUTH" "$HOST/api/calls/active?imsi=001010123456789"
+curl -s -H "$AUTH" "$HOST/api/subscribers/001010123456789/calls/active"
 
 # Counts
 curl -s -H "$AUTH" "$HOST/api/subscribers/online/count"
-curl -s -H "$AUTH" "$HOST/api/calls/active/count?imsi=999704281565023"
+curl -s -H "$AUTH" "$HOST/api/calls/active/count?imsi=001010123456789"
 curl -s -H "$AUTH" "$HOST/api/links/count"
 
 # Links

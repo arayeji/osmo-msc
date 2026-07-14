@@ -83,3 +83,8 @@ doc/manuals/build
 doc/manuals/vty/msc_vty_reference.xml
 
 contrib/osmo-msc.spec
+
+# Local server credentials and debug scratch (never commit)
+contrib/server-common.env
+contrib/_*.sh
+contrib/_*.txt
