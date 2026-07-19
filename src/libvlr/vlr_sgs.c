@@ -240,6 +240,16 @@ void vlr_sgs_tmsi_reall_compl(struct vlr_instance *vlr, const char *imsi)
 	vlr_subscr_put(vsub, __func__);
 }
 
+/* Stop ongoing SGs paging: cancel Ts5 and release VSUB_USE_SGS_PAGING_REQ once.
+ * Safe after Ts5 already expired (timeout already put the use-count). */
+static void vlr_sgs_pag_stop(struct vlr_subscr *vsub)
+{
+	if (!osmo_timer_pending(&vsub->sgs.Ts5))
+		return;
+	osmo_timer_del(&vsub->sgs.Ts5);
+	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
+}
+
 /*! Notify that an SGs paging has been rejected by the MME.
  *  \param[in] vsub VLR subscriber.
  *  \param[in] imsi mobile identity (IMSI).
@@ -253,13 +263,13 @@ void vlr_sgs_pag_rej(struct vlr_instance *vlr, const char *imsi, enum sgsap_sgs_
 
 	/* On the reception of a paging rej the VLR is supposed to stop Ts5,
 	   also  3GPP TS 29.118, chapter 5.1.2.4 */
-	osmo_timer_del(&vsub->sgs.Ts5);
 	LOGSGS(LOGL_DEBUG, "(sub %s) Paging via SGs interface rejected by MME, %s stopped, cause: %s!\n",
 	     vlr_subscr_msisdn_or_name(vsub), vlr_sgs_state_timer_name(SGS_STATE_TS5), sgsap_sgs_cause_name(cause));
 
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_PAGING_FAILURE, &cause);
-	/* Balance ref count increment from vlr_sgs_pag() */
-	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
+	/* Balance ref count from vlr_sgs_pag() only if Ts5 was still running.
+	 * A late PAGING-REJECT after Ts5 expiry must not put again. */
+	vlr_sgs_pag_stop(vsub);
 
 	vlr_subscr_put(vsub, __func__);
 }
@@ -275,9 +285,7 @@ void vlr_sgs_pag_ack(struct vlr_instance *vlr, const char *imsi)
 		return;
 
 	/* Stop Ts5 and and consider the paging as successful */
-	osmo_timer_del(&vsub->sgs.Ts5);
-	/* Balance ref count increment from vlr_sgs_pag() */
-	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
+	vlr_sgs_pag_stop(vsub);
 
 	vlr_subscr_put(vsub, __func__);
 }
@@ -295,12 +303,12 @@ void vlr_sgs_ue_unr(struct vlr_instance *vlr, const char *imsi, enum sgsap_sgs_c
 
 	/* On the reception of an UE unreachable the VLR is supposed to stop
 	 * Ts5, also 3GPP TS 29.118, chapter 5.1.2.5 */
-	osmo_timer_del(&vsub->sgs.Ts5);
 	LOGSGS(LOGL_DEBUG,
 	     "(sub %s) Paging via SGs interface not possible, UE unreachable, %s stopped, cause: %s\n",
 	     vlr_subscr_msisdn_or_name(vsub), vlr_sgs_state_timer_name(SGS_STATE_TS5), sgsap_sgs_cause_name(cause));
 
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_SGSAP_UE_UNREACHABLE, &cause);
+	vlr_sgs_pag_stop(vsub);
 	vlr_subscr_put(vsub, __func__);
 }
 
@@ -317,7 +325,8 @@ static void Ts5_timeout_cb(void *arg)
 	LOGSGS(LOGL_ERROR, "(sub %s) Paging via SGs interface timed out (%s expired)!\n",
 	     vlr_subscr_msisdn_or_name(vsub), vlr_sgs_state_timer_name(SGS_STATE_TS5));
 
-	/* Balance ref count increment from vlr_sgs_pag() */
+	/* Balance ref count increment from vlr_sgs_pag(). Timer is already not
+	 * pending here; late pag_rej/ack must not put again (see vlr_sgs_pag_stop). */
 	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
 
 	return;
@@ -327,11 +336,12 @@ static void Ts5_timeout_cb(void *arg)
  *  \param[in] vsub VLR subscriber. */
 void vlr_sgs_pag(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind)
 {
+	bool already_paging = osmo_timer_pending(&vsub->sgs.Ts5);
 
 	/* In cases where we have to respawn a paging after an intermitted LU,
 	 * there may e a Ts5 still running. In those cases we have to remove
-	 * the old timer first */
-	if (osmo_timer_pending(&vsub->sgs.Ts5))
+	 * the old timer first. Keep the existing VSUB_USE_SGS_PAGING_REQ. */
+	if (already_paging)
 		osmo_timer_del(&vsub->sgs.Ts5);
 
 	/* Note: 3GPP TS 29.118, chapter 4.2.2 mentions paging in the FSM
@@ -356,9 +366,9 @@ void vlr_sgs_pag(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind)
 	vsub->sgs.paging_serv_ind = serv_ind;
 
 	/* Ensure that the reference count is increased by one while the
-	 * paging is happening. We will balance this again in vlr_sgs_pag_rej()
-	 * and vlr_sgs_pag_ack(); */
-	vlr_subscr_get(vsub, VSUB_USE_SGS_PAGING_REQ);
+	 * paging is happening. Balanced in Ts5_timeout_cb / vlr_sgs_pag_stop. */
+	if (!already_paging)
+		vlr_subscr_get(vsub, VSUB_USE_SGS_PAGING_REQ);
 }
 
 /*! Check if the SGs interface is currently paging
