@@ -48,6 +48,7 @@
 #include <osmocom/msc/transaction.h>
 #include <osmocom/gsupclient/gsup_client.h>
 #include <osmocom/msc/msc_a.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/paging.h>
 #include <osmocom/gsupclient/gsup_client_mux.h>
@@ -86,7 +87,7 @@ static void ncss_session_timeout_handler(void *_trans)
 
 	OSMO_STRLCPY_ARRAY(gsup_msg.imsi, trans->vsub->imsi);
 
-	gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+	msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 
 	/* Finally, release this transaction */
 	trans_free(trans);
@@ -243,7 +244,7 @@ int gsm0911_rcv_nc_ss(struct msc_a *msc_a, struct msgb *msg)
 	/* Fill in subscriber's IMSI */
 	OSMO_STRLCPY_ARRAY(gsup_msg.imsi, vsub->imsi);
 
-	rc = gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+	rc = msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 
 	/* Should we release connection? Or wait for response? */
 	if (msg_type == GSM0480_MTYPE_RELEASE_COMPLETE)
@@ -327,7 +328,7 @@ static void ss_paging_cb(struct msc_a *msc_a, struct gsm_trans *trans)
 		OSMO_STRLCPY_ARRAY(gsup_msg.imsi, trans->vsub->imsi);
 
 		/* Inform HLR/EUSE about the failure */
-		gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+		msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 
 		msgb_free(trans->ss.msg);
 		trans->ss.msg = NULL;
@@ -438,6 +439,8 @@ int gsm0911_gsup_rx(struct gsup_client_mux *gcm, void *data, const struct osmo_g
 	bool trans_end;
 	struct msc_a *msc_a;
 	struct vlr_subscr *vsub;
+
+	msc_api_trace_gsup_rx(gsup_msg);
 
 	vsub = vlr_subscr_find_by_imsi(net->vlr, gsup_msg->imsi, __func__);
 	if (!vsub) {

@@ -42,6 +42,7 @@
 #include <osmocom/msc/msc_i.h>
 
 #include <osmocom/msc/debug.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/sgs_iface.h>
 #include <osmocom/msc/sgs_server.h>
 #include <osmocom/gsm/protocol/gsm_29_118.h>
@@ -298,13 +299,41 @@ static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, 
  * SGsAP transmit functions
  ***********************************************************************/
 
+static const char *sgs_imsi_from_msg(struct msgb *msg, char *buf, size_t buf_len)
+{
+	struct tlv_parsed tp;
+	struct osmo_mobile_identity mi;
+
+	if (msgb_l2len(msg) < 1)
+		return NULL;
+
+	if (tlv_parse(&tp, &sgsap_ie_tlvdef, msgb_l2(msg) + 1, msgb_l2len(msg) - 1, 0, 0) < 0)
+		return NULL;
+	if (!TLVP_PRESENT(&tp, SGSAP_IE_IMSI))
+		return NULL;
+	if (osmo_mobile_identity_decode(&mi, TLVP_VAL(&tp, SGSAP_IE_IMSI),
+					 TLVP_LEN(&tp, SGSAP_IE_IMSI), false))
+		return NULL;
+	if (mi.type != GSM_MI_TYPE_IMSI)
+		return NULL;
+	osmo_strlcpy(buf, mi.imsi, buf_len);
+	return buf;
+}
+
 /* Send message out to remote end (final step) */
 static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg)
 {
+	char imsi_buf[GSM23003_IMSI_MAX_DIGITS + 1];
+	const char *imsi;
+
 	if (!msg) {
 		LOGSGC(sgc, LOGL_NOTICE, "Null message, cannot transmit!\n");
 		return;
 	}
+
+	imsi = sgs_imsi_from_msg(msg, imsi_buf, sizeof(imsi_buf));
+	if (imsi)
+		msc_api_trace_packet(imsi, "sgsap", false, msgb_l2(msg), msgb_l2len(msg));
 
 	msgb_sctp_ppid(msg) = 0;
 	if (!sgc) {
@@ -1026,6 +1055,9 @@ int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg)
 		}
 		OSMO_STRLCPY_ARRAY(imsi, mi.imsi);
 	}
+
+	if (imsi[0])
+		msc_api_trace_packet(imsi, "sgsap", true, msgb_l2(msg), msgb_l2len(msg));
 
 	/* Some messages contain an MME-NAME as mandatory IE, parse it right here. The
 	 * MME-NAME is also immediately registered with the sgc, so it will be implicitly

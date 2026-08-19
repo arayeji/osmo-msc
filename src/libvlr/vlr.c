@@ -25,6 +25,7 @@
 #include <osmocom/core/utils.h>
 #include <osmocom/core/timer.h>
 #include <osmocom/core/tdef.h>
+#include <osmocom/core/msgb.h>
 #include <osmocom/gsm/protocol/gsm_04_08_gprs.h>
 #include <osmocom/gsm/gsm23236.h>
 #include <osmocom/gsm/gsup.h>
@@ -347,6 +348,23 @@ struct vlr_subscr *_vlr_subscr_find_by_mi(struct vlr_instance *vlr,
 }
 
 /* Transmit GSUP message for subscriber to HLR, using IMSI from subscriber */
+static void vlr_trace_gsup_packet(struct vlr_instance *vlr, const char *imsi, bool is_rx,
+				  const struct osmo_gsup_message *gsup_msg)
+{
+	struct msgb *msg;
+
+	if (!vlr->imsi_trace_packet || !imsi || !imsi[0])
+		return;
+
+	msg = msgb_alloc(1024, "gsup-trace");
+	if (!msg)
+		return;
+
+	if (osmo_gsup_encode(msg, gsup_msg) == 0)
+		vlr->imsi_trace_packet(vlr, imsi, "gsup", is_rx, msg->data, msg->len);
+	msgb_free(msg);
+}
+
 static int vlr_subscr_tx_gsup_message(const struct vlr_subscr *vsub,
 				      struct osmo_gsup_message *gsup_msg)
 {
@@ -357,6 +375,7 @@ static int vlr_subscr_tx_gsup_message(const struct vlr_subscr *vsub,
 
 	gsup_msg->message_class = OSMO_GSUP_MESSAGE_CLASS_SUBSCRIBER_MANAGEMENT;
 
+	vlr_trace_gsup_packet(vlr, gsup_msg->imsi, false, gsup_msg);
 	return gsup_client_mux_tx(vlr->gcm, gsup_msg);
 }
 
@@ -1350,6 +1369,9 @@ int vlr_gsup_rx(struct gsup_client_mux *gcm, void *data, const struct osmo_gsup_
 	struct vlr_instance *vlr = data;
 	struct vlr_subscr *vsub;
 	int rc = 0;
+
+	if (gsup->imsi[0])
+		vlr_trace_gsup_packet(vlr, gsup->imsi, true, gsup);
 
 	vsub = vlr_subscr_find_by_imsi(vlr, gsup->imsi, __func__);
 	if (!vsub) {

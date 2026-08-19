@@ -22,6 +22,9 @@
 #include <osmocom/core/stat_item.h>
 #include <osmocom/core/timer.h>
 #include <osmocom/core/utils.h>
+#include <osmocom/core/base64.h>
+#include <osmocom/gsm/gsup.h>
+#include <osmocom/gsupclient/gsup_client_mux.h>
 #include <osmocom/gsm/gsm23003.h>
 #include <osmocom/gsm/protocol/gsm_04_08.h>
 #include <osmocom/msc/debug.h>
@@ -1187,12 +1190,100 @@ static struct msc_api_trace *api_trace_find(struct msc_api_state *api, const cha
 	return NULL;
 }
 
+static void msc_api_vlr_trace_packet(struct vlr_instance *vlr, const char *imsi, const char *proto,
+				     bool is_rx, const uint8_t *data, size_t len)
+{
+	(void)vlr;
+	msc_api_trace_packet(imsi, proto, is_rx, data, len);
+}
+
+void msc_api_trace_register_vlr(struct gsm_network *net)
+{
+	if (net && net->vlr)
+		net->vlr->imsi_trace_packet = msc_api_vlr_trace_packet;
+}
+
+bool msc_api_trace_active(const char *imsi)
+{
+	if (!g_msc_api || !imsi || !imsi[0])
+		return false;
+	return api_trace_find(g_msc_api, imsi) != NULL;
+}
+
+void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
+			  const uint8_t *data, size_t len)
+{
+	struct msc_api_trace *t;
+	size_t log_len, b64_buf_len, olen;
+	unsigned char *b64;
+	bool trunc = false;
+
+	if (!g_msc_api || !imsi || !imsi[0] || !proto || !data || len == 0)
+		return;
+
+	t = api_trace_find(g_msc_api, imsi);
+	if (!t)
+		return;
+
+	log_len = len;
+	if (log_len > MSC_API_TRACE_PACKET_MAX) {
+		log_len = MSC_API_TRACE_PACKET_MAX;
+		trunc = true;
+	}
+
+	b64_buf_len = ((log_len + 2) / 3) * 4 + 1;
+	b64 = talloc_size(g_msc_api, b64_buf_len);
+	if (!b64)
+		return;
+
+	if (osmo_base64_encode(b64, b64_buf_len, &olen, data, log_len) != 0) {
+		talloc_free(b64);
+		return;
+	}
+
+	if (trunc)
+		fprintf(stderr, "[IMSI:%s] PACKET: proto=%s dir=%s len=%zu trunc=1 b64=%s\n",
+			imsi, proto, is_rx ? "rx" : "tx", len, b64);
+	else
+		fprintf(stderr, "[IMSI:%s] PACKET: proto=%s dir=%s len=%zu b64=%s\n",
+			imsi, proto, is_rx ? "rx" : "tx", len, b64);
+
+	talloc_free(b64);
+}
+
+static void msc_api_trace_gsup(const struct osmo_gsup_message *gsup_msg, bool is_rx)
+{
+	struct msgb *msg;
+
+	if (!gsup_msg || !gsup_msg->imsi[0])
+		return;
+
+	msg = msgb_alloc(1024, "gsup-trace");
+	if (!msg)
+		return;
+
+	if (osmo_gsup_encode(msg, gsup_msg) == 0)
+		msc_api_trace_packet(gsup_msg->imsi, "gsup", is_rx, msg->data, msg->len);
+	msgb_free(msg);
+}
+
+void msc_api_trace_gsup_rx(const struct osmo_gsup_message *gsup_msg)
+{
+	msc_api_trace_gsup(gsup_msg, true);
+}
+
+int msc_gsup_mux_tx(struct gsup_client_mux *gcm, const struct osmo_gsup_message *gsup_msg)
+{
+	msc_api_trace_gsup(gsup_msg, false);
+	return gsup_client_mux_tx(gcm, gsup_msg);
+}
+
 static char *api_json_trace(void *ctx, const struct msc_api_trace *t, const char *status)
 {
 	char *imsi = json_escape(ctx, t->imsi);
 
 	return talloc_asprintf(ctx,
-		"{\"status\":\"%s\",\"imsi\":\"%s\",\"output\":\"journal\",\"level\":\"debug\"}",
+		"{\"status\":\"%s\",\"imsi\":\"%s\",\"output\":\"journal\",\"level\":\"debug\",\"packets\":true}",
 		status, imsi);
 }
 
@@ -1659,6 +1750,7 @@ struct msc_api_state *msc_api_alloc(void *ctx, struct gsm_network *net)
 
 	g_msc_api = api;
 	net->api = api;
+	msc_api_trace_register_vlr(net);
 	return api;
 }
 

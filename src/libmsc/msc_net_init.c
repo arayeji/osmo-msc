@@ -29,6 +29,7 @@
 #include <osmocom/msc/gsm_data.h>
 #include <osmocom/vlr/vlr.h>
 #include <osmocom/msc/debug.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/gsupclient/gsup_client_mux.h>
 #include <osmocom/msc/gsm_04_11_gsup.h>
 #include <osmocom/msc/gsm_09_11.h>
@@ -114,6 +115,7 @@ int msc_vlr_alloc(struct gsm_network *net)
 	if (!net->vlr)
 		return -ENOMEM;
 	net->vlr->user_ctx = net;
+	msc_api_trace_register_vlr(net);
 	return 0;
 }
 

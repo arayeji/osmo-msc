@@ -48,6 +48,7 @@
 #include <osmocom/msc/call_leg.h>
 #include <osmocom/msc/rtp_stream.h>
 #include <osmocom/msc/msc_ho.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/codec_mapping.h>
 #include <osmocom/msc/msc_vgcs.h>
 
@@ -1462,6 +1463,9 @@ int msc_a_up_l3(struct msc_a *msc_a, struct msgb *msg)
 		return -EACCES;
 	}
 
+	if (vsub)
+		msc_api_trace_packet(vsub->imsi, "dtap", true, msgb_l3(msg), msgb_l3len(msg));
+
 #if 0
 	if (silent_call_reroute(conn, msg))
 		return silent_call_rx(conn, msg);
@@ -2154,6 +2158,16 @@ int msc_a_tx_dtap_to_i(struct msc_a *msc_a, struct msgb *dtap)
 	if (msc_a->c.ran->type == OSMO_RAT_EUTRAN_SGS) {
 		/* The SGs connection to the MME always is at the MSC-A. */
 		return sgs_iface_tx_dtap_ud(msc_a, dtap);
+	}
+
+	{
+		struct vlr_subscr *vsub = msc_a_vsub(msc_a);
+		if (vsub) {
+			const uint8_t *data = msgb_l3(dtap) ? : dtap->data;
+			size_t len = msgb_l3(dtap) ? msgb_l3len(dtap) : msgb_length(dtap);
+
+			msc_api_trace_packet(vsub->imsi, "dtap", false, data, len);
+		}
 	}
 
 	LOG_MSC_A(msc_a, LOGL_DEBUG, "Sending DTAP: %s %s\n",

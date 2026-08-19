@@ -11,6 +11,11 @@ struct log_target;
 #define MSC_API_PORT_DEFAULT 8080
 #define MSC_API_BIND_DEFAULT "127.0.0.1"
 #define MSC_API_TOKEN_MAXLEN 128
+/* Max raw bytes base64-encoded per PACKET trace line (trunc=1 if longer). */
+#define MSC_API_TRACE_PACKET_MAX 4096
+
+struct osmo_gsup_message;
+struct gsup_client_mux;
 
 /* One active per-IMSI debug trace: a dedicated libosmocore stderr log target
  * (captured by journald) whose VLR-subscriber filter is pinned to this
@@ -36,6 +41,12 @@ struct msc_api_state {
 struct vty;
 
 struct msc_api_state *msc_api_alloc(void *ctx, struct gsm_network *net);
+void msc_api_trace_register_vlr(struct gsm_network *net);
+bool msc_api_trace_active(const char *imsi);
+void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
+			  const uint8_t *data, size_t len);
+void msc_api_trace_gsup_rx(const struct osmo_gsup_message *gsup_msg);
+int msc_gsup_mux_tx(struct gsup_client_mux *gcm, const struct osmo_gsup_message *gsup_msg);
 bool msc_api_configured(const struct msc_api_state *api);
 int msc_api_open(struct msc_api_state *api);
 void msc_api_close(struct msc_api_state *api);

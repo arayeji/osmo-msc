@@ -34,6 +34,7 @@
 #include <osmocom/msc/msub.h>
 #include <osmocom/gsupclient/gsup_client_mux.h>
 #include <osmocom/msc/msc_a.h>
+#include <osmocom/msc/msc_api.h>
 
 /* Common helper for preparing to be encoded GSUP message */
 static void gsup_sm_msg_init(struct osmo_gsup_message *gsup_msg,
@@ -99,7 +100,7 @@ int gsm411_gsup_mo_fwd_sm_req(struct gsm_trans *trans, struct msgb *msg,
 	gsup_msg.sm_rp_ui = (uint8_t *) msgb_sms(msg);
 
 	gsup_client_mux_tx_set_source(trans->net->gcm, &gsup_msg);
-	return gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+	return msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 }
 
 int gsm411_gsup_mo_ready_for_sm_req(struct gsm_trans *trans, uint8_t sm_rp_mr)
@@ -122,7 +123,7 @@ int gsm411_gsup_mo_ready_for_sm_req(struct gsm_trans *trans, uint8_t sm_rp_mr)
 	gsup_msg.sm_alert_rsn = OSMO_GSUP_SMS_SM_ALERT_RSN_MEM_AVAIL;
 
 	gsup_client_mux_tx_set_source(trans->net->gcm, &gsup_msg);
-	return gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+	return msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 }
 
 /* Triggers either RP-ACK or RP-ERROR on response from SMSC */
@@ -210,7 +211,7 @@ int gsm411_gsup_mt_fwd_sm_res(struct gsm_trans *trans, uint8_t sm_rp_mr, const u
 
 	trans->sms.gsup_rsp_pending = false;
 
-	return gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+	return msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 }
 
 int gsm411_gsup_mt_fwd_sm_err(struct gsm_trans *trans,
@@ -249,7 +250,7 @@ int gsm411_gsup_mt_fwd_sm_err(struct gsm_trans *trans,
 
 	trans->sms.gsup_rsp_pending = false;
 
-	return gsup_client_mux_tx(trans->net->gcm, &gsup_msg);
+	return msc_gsup_mux_tx(trans->net->gcm, &gsup_msg);
 }
 
 /* Handles MT SMS (and triggers Paging Request if required) */
@@ -308,6 +309,8 @@ int gsm411_gsup_rx(struct gsup_client_mux *gcm, void *data, const struct osmo_gs
 	struct gsm_network *net = (struct gsm_network *) data;
 	struct vlr_subscr *vsub;
 	int rc;
+
+	msc_api_trace_gsup_rx(gsup_msg);
 
 	/* Make sure that 'SMS over GSUP' is expected */
 	if (!net->sms_over_gsup) {

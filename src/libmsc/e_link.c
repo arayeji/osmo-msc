@@ -27,6 +27,7 @@
 #include <osmocom/msc/gsm_data.h>
 #include <osmocom/gsupclient/gsup_client_mux.h>
 #include <osmocom/msc/e_link.h>
+#include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/msc_roles.h>
 #include <osmocom/vlr/vlr.h>
@@ -148,7 +149,7 @@ int e_tx(struct e_link *e, const struct osmo_gsup_message *gsup_msg)
 	LOG_E_LINK_CAT(e, DLGSUP, LOGL_DEBUG, "Tx GSUP %s to %s\n",
 		       osmo_gsup_message_type_name(gsup_msg->message_type),
 		       e_link_name(e));
-	return gsup_client_mux_tx(e->gcm, gsup_msg);
+	return msc_gsup_mux_tx(e->gcm, gsup_msg);
 }
 
 const char *e_link_name(struct e_link *e)
@@ -228,6 +229,8 @@ static int msc_a_i_t_gsup_rx(struct gsup_client_mux *gcm, void *data, const stru
 	int i;
 
 	OSMO_ASSERT(net);
+
+	msc_api_trace_gsup_rx(gsup_msg);
 
 	vsub = vlr_subscr_find_by_imsi(vlr, gsup_msg->imsi, __func__);
 	if (vsub)

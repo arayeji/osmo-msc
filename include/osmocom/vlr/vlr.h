@@ -284,6 +284,9 @@ struct vlr_instance {
 	struct rate_ctr_group *ctrg;
 	/* A free-form pointer for use by the caller */
 	void *user_ctx;
+	/*! Optional callback for IMSI-scoped packet tracing (OsmoMSC API trace). */
+	void (*imsi_trace_packet)(struct vlr_instance *vlr, const char *imsi, const char *proto,
+				  bool is_rx, const uint8_t *data, size_t len);
 };
 
 extern const struct value_string vlr_ciph_names[];
