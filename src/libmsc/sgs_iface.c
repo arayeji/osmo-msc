@@ -299,15 +299,29 @@ static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, 
  * SGsAP transmit functions
  ***********************************************************************/
 
+static void sgsap_msg_payload(const struct msgb *msg, const uint8_t **data, size_t *len)
+{
+	if (msg->l2h) {
+		*data = msgb_l2(msg);
+		*len = msgb_l2len(msg);
+	} else {
+		*data = msg->data;
+		*len = msg->tail - msg->data;
+	}
+}
+
 static const char *sgs_imsi_from_msg(struct msgb *msg, char *buf, size_t buf_len)
 {
 	struct tlv_parsed tp;
 	struct osmo_mobile_identity mi;
+	const uint8_t *payload;
+	size_t plen;
 
-	if (msgb_l2len(msg) < 1)
+	sgsap_msg_payload(msg, &payload, &plen);
+	if (plen < 1)
 		return NULL;
 
-	if (tlv_parse(&tp, &sgsap_ie_tlvdef, msgb_l2(msg) + 1, msgb_l2len(msg) - 1, 0, 0) < 0)
+	if (tlv_parse(&tp, &sgsap_ie_tlvdef, (uint8_t *)payload + 1, plen - 1, 0, 0) < 0)
 		return NULL;
 	if (!TLVP_PRESENT(&tp, SGSAP_IE_IMSI))
 		return NULL;
@@ -332,8 +346,13 @@ static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg)
 	}
 
 	imsi = sgs_imsi_from_msg(msg, imsi_buf, sizeof(imsi_buf));
-	if (imsi)
-		msc_api_trace_packet(imsi, "sgsap", false, msgb_l2(msg), msgb_l2len(msg));
+	if (imsi) {
+		const uint8_t *payload;
+		size_t plen;
+
+		sgsap_msg_payload(msg, &payload, &plen);
+		msc_api_trace_packet(imsi, "sgsap", false, payload, plen);
+	}
 
 	msgb_sctp_ppid(msg) = 0;
 	if (!sgc) {
@@ -1056,8 +1075,13 @@ int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg)
 		OSMO_STRLCPY_ARRAY(imsi, mi.imsi);
 	}
 
-	if (imsi[0])
-		msc_api_trace_packet(imsi, "sgsap", true, msgb_l2(msg), msgb_l2len(msg));
+	if (imsi[0]) {
+		const uint8_t *payload;
+		size_t plen;
+
+		sgsap_msg_payload(msg, &payload, &plen);
+		msc_api_trace_packet(imsi, "sgsap", true, payload, plen);
+	}
 
 	/* Some messages contain an MME-NAME as mandatory IE, parse it right here. The
 	 * MME-NAME is also immediately registered with the sgc, so it will be implicitly
