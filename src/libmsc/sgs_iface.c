@@ -1024,8 +1024,18 @@ static int sgs_rx_csfb_ind(struct sgs_connection *sgc, struct msgb *msg, const s
 	 * exists in the VLR and if there are any lingering connections open.*/
 
 	vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
-	if (!vsub)
-		return sgs_tx_status(sgc, imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, msg, SGSAP_IE_IMSI);
+	if (!vsub) {
+		/* A CSFB indication for a subscriber we do not know (yet) is
+		 * common when the UE attempts CSFB before its SGs LU reached
+		 * us; reply with STATUS but do not treat it as an error. */
+		struct msgb *resp;
+		LOGSGC(sgc, LOGL_INFO, "Rx %s for unknown IMSI %s, replying with status (cause %s)\n",
+		       sgsap_msg_type_name(msg->data[0]), imsi,
+		       sgsap_sgs_cause_name(SGSAP_SGS_CAUSE_IMSI_UNKNOWN));
+		resp = gsm29118_create_status(imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, msg);
+		sgs_tx(sgc, resp);
+		return 0;
+	}
 
 	/* 3GPP TS 23.272 sec 4.3.3 (CSFB):
 	 * "During the SGs location update procedure, obtaining the last used LTE PLMN ID via TAI"

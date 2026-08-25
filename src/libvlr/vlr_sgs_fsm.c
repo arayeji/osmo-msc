@@ -77,11 +77,16 @@ static void perform_lu(struct osmo_fsm_inst *fi)
 	struct sgs_lu_response sgs_lu_response = {0};
 	int rc;
 
-	/* Note: At the moment we allocate a new TMSI on each LU. */
-	rc = vlr_subscr_alloc_tmsi(vsub);
-	if (rc != 0) {
-		LOGPFSML(fi, LOGL_ERROR, "(sub %s) VLR LU tmsi allocation failed\n", vlr_subscr_name(vsub));
-		goto error;
+	/* Only allocate a new TMSI if the subscriber does not have a valid one
+	 * yet. Reallocating a TMSI on every SGs LU generates a needless
+	 * TMSI REALLOCATION COMPLETE round-trip per LU, which at high LU rates
+	 * causes significant signaling and CPU load. */
+	if (vsub->tmsi == GSM_RESERVED_TMSI) {
+		rc = vlr_subscr_alloc_tmsi(vsub);
+		if (rc != 0) {
+			LOGPFSML(fi, LOGL_ERROR, "(sub %s) VLR LU tmsi allocation failed\n", vlr_subscr_name(vsub));
+			goto error;
+		}
 	}
 
 	rc = vlr_subscr_req_lu(vsub);
@@ -126,6 +131,10 @@ static void sgs_ue_fsm_null(struct osmo_fsm_inst *fi, uint32_t event, void *data
 		break;
 	case SGS_UE_E_RX_PAGING_FAILURE:
 		/* do nothing */
+		break;
+	case SGS_UE_E_RX_TMSI_REALLOC:
+		/* Late TMSI REALLOCATION COMPLETE after the association went
+		 * back to NULL; nothing to do. */
 		break;
 	default:
 		OSMO_ASSERT(0);
@@ -188,6 +197,10 @@ static void sgs_ue_fsm_lau_present(struct osmo_fsm_inst *fi, uint32_t event, voi
 	case SGS_UE_E_TX_PAGING:
 		/* do nothing */
 		break;
+	case SGS_UE_E_RX_TMSI_REALLOC:
+		/* TMSI REALLOCATION COMPLETE racing with a new LU; the pending
+		 * LU result will supersede it, nothing to do. */
+		break;
 	default:
 		OSMO_ASSERT(0);
 		break;
@@ -206,9 +219,17 @@ static void sgs_ue_fsm_associated(struct osmo_fsm_inst *fi, uint32_t event, void
 		break;
 	case SGS_UE_E_RX_TMSI_REALLOC:
 		if (vsub->tmsi_new == GSM_RESERVED_TMSI) {
-			LOGPFSML(fi, LOGL_ERROR,
+			/* Duplicate or spurious TMSI REALLOCATION COMPLETE from
+			 * the MME. This is frequent and harmless, so log at
+			 * DEBUG only. Do not overwrite the valid TMSI with
+			 * GSM_RESERVED_TMSI. */
+			LOGPFSML(fi, LOGL_DEBUG,
 				 "(sub %s) TMSI reallocation completed at the MME, but no TMSI reallocation ordered.\n",
 				 vlr_subscr_msisdn_or_name(vsub));
+			/* Re-enter ASSOCIATED without timeout to stop a
+			 * possibly lingering Ts6-2. */
+			osmo_fsm_inst_state_chg(fi, SGS_UE_ST_ASSOCIATED, 0, 0);
+			break;
 		}
 
 		vsub->tmsi = vsub->tmsi_new;
@@ -304,6 +325,7 @@ static const struct osmo_fsm_state sgs_ue_fsm_states[] = {
 			| S(SGS_UE_E_RX_LU_FROM_MME)
 			| S(SGS_UE_E_TX_PAGING)
 			| S(SGS_UE_E_RX_PAGING_FAILURE)
+			| S(SGS_UE_E_RX_TMSI_REALLOC)
 			,
 		.out_state_mask = 0
 			| S(SGS_UE_ST_NULL)
@@ -319,6 +341,7 @@ static const struct osmo_fsm_state sgs_ue_fsm_states[] = {
 			| S(SGS_UE_E_TX_PAGING)
 			| S(SGS_UE_E_RX_PAGING_FAILURE)
 			| S(SGS_UE_E_RX_ALERT_FAILURE)
+			| S(SGS_UE_E_RX_TMSI_REALLOC)
 			,
 		.out_state_mask = 0
 			| S(SGS_UE_ST_NULL)
