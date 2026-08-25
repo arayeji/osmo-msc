@@ -89,17 +89,56 @@ enum sgs_vlr_reset_fsm_event {
  * SGs utility functions
  ***********************************************************************/
 
+/* Check if there are connections associated with a given subscriber. If yes,
+ * make sure that those connections are tossed. */
+static void subscr_conn_toss(struct vlr_subscr *vsub)
+{
+	struct msub *msub;
+	struct msc_a *msc_a;
+
+	msub = msub_for_vsub(vsub);
+	if (!msub)
+		return;
+
+	msc_a = msub_msc_a(msub);
+
+	LOG_MSUB(msub, LOGL_ERROR, "Force releasing previous subscriber connection: an SGs connection for this"
+		 " subscriber is being initiated\n");
+
+	msub_set_vsub(msub, NULL);
+
+	if (!msc_a) {
+		osmo_fsm_inst_term(msub->fi, OSMO_FSM_TERM_ERROR, NULL);
+		return;
+	}
+
+	if (msc_a_in_release(msc_a))
+		osmo_fsm_inst_term(msc_a->c.fi, OSMO_FSM_TERM_ERROR, msc_a->c.fi);
+	else
+		msc_a_release_mo(msc_a, GSM_CAUSE_AUTH_FAILED);
+}
+
 /* Allocate a new subscriber connection */
 static struct msc_a *subscr_conn_allocate_sgs(struct sgs_connection *sgc, struct vlr_subscr *vsub, bool mt)
 {
 	struct msub *msub;
 	struct msc_a *msc_a;
+	int rc;
+
+	subscr_conn_toss(vsub);
 
 	msub = msub_alloc(gsm_network);
 	msc_a = msc_a_alloc(msub,
 			    &msc_ran_infra[OSMO_RAT_EUTRAN_SGS]);
 	msc_a->complete_layer3_type = mt ? COMPLETE_LAYER3_PAGING_RESP : COMPLETE_LAYER3_CM_SERVICE_REQ;
-	msub_set_vsub(msub, vsub);
+
+	rc = msub_set_vsub(msub, vsub);
+	if (rc != 0) {
+		LOGSGC(sgc, LOGL_ERROR, "Failed to associate SGs connection with %s\n",
+		       vlr_subscr_name(vsub));
+		osmo_fsm_inst_term(msc_a->c.fi, OSMO_FSM_TERM_ERROR, NULL);
+		return NULL;
+	}
 
 	if (mt)
 		msc_a_get(msc_a, MSC_A_USE_PAGING_RESPONSE);
@@ -110,23 +149,6 @@ static struct msc_a *subscr_conn_allocate_sgs(struct sgs_connection *sgc, struct
 	osmo_fsm_inst_dispatch(msc_a->c.fi, MSC_A_EV_AUTHENTICATED, NULL);
 
 	return msc_a;
-}
-
-/* Check if there are connections associated with a given subscriber. If yes,
- * make sure that those connections are tossed. */
-static void subscr_conn_toss(struct vlr_subscr *vsub)
-{
-	struct msub *msub;
-
-	msub = msub_for_vsub(vsub);
-	if (!msub)
-		return;
-
-	LOG_MSUB(msub, LOGL_ERROR, "Force releasing previous subscriber connection: an SGs connection for this"
-		 " subscriber is being initiated\n");
-
-	msc_a_release_mo(msub_msc_a(msub), GSM_CAUSE_AUTH_FAILED);
-	/* TODO: is this strong enough? After this, it should be completely disassociated with this subscriber. */
 }
 
 struct sgs_mme_ctx *sgs_mme_by_fqdn(struct sgs_state *sgs, const char *mme_fqdn)

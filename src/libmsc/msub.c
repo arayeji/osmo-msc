@@ -353,22 +353,39 @@ int msub_set_vsub(struct msub *msub, struct vlr_subscr *vsub)
 	}
 	if (vsub) {
 		struct msub *other_msub = msub_for_vsub(vsub);
-		if (other_msub) {
+		if (other_msub && other_msub != msub) {
 			struct msc_a *msc_a = msub_msc_a(msub);
 			struct msc_a *other_msc_a = msub_msc_a(other_msub);
-			LOG_MSC_A(msc_a, LOGL_ERROR,
-				  "Cannot associate with VLR subscr, another connection is already active%s%s\n",
-				  other_msc_a ? " at " : "", other_msc_a ? other_msc_a->c.fi->id : "");
-			LOG_MSC_A(other_msc_a, LOGL_ERROR, "Attempt to associate a second subscriber connection%s%s\n",
-				  msc_a ? " at " : "", msc_a ? msc_a->c.fi->id : "");
-			if (other_msc_a && msc_a_in_release(other_msc_a)) {
-				LOG_MSC_A(other_msc_a, LOGL_ERROR,
-					  "Another connection for this subscriber is coming up, since this"
-					  " is already in release, forcefully discarding it\n");
-				osmo_fsm_inst_term(other_msc_a->c.fi, OSMO_FSM_TERM_ERROR, other_msc_a->c.fi);
-				/* Count this as "recovered from duplicate connection" error and do associate. */
-			} else
+			bool replace = false;
+
+			if (other_msc_a && msc_a_in_release(other_msc_a))
+				replace = true;
+			else if (other_msc_a && other_msc_a->c.ran->type == OSMO_RAT_EUTRAN_SGS)
+				replace = true;
+
+			if (!replace) {
+				LOG_MSC_A(msc_a, LOGL_ERROR,
+					  "Cannot associate with VLR subscr, another connection is already active%s%s\n",
+					  other_msc_a ? " at " : "", other_msc_a ? other_msc_a->c.fi->id : "");
+				LOG_MSC_A(other_msc_a, LOGL_ERROR, "Attempt to associate a second subscriber connection%s%s\n",
+					  msc_a ? " at " : "", msc_a ? msc_a->c.fi->id : "");
 				return -EINVAL;
+			}
+
+			LOG_MSC_A(msc_a, LOGL_NOTICE,
+				  "Replacing lingering subscriber connection%s%s\n",
+				  other_msc_a ? " at " : "", other_msc_a ? other_msc_a->c.fi->id : "");
+
+			msub_set_vsub(other_msub, NULL);
+
+			if (other_msc_a) {
+				if (msc_a_in_release(other_msc_a))
+					osmo_fsm_inst_term(other_msc_a->c.fi, OSMO_FSM_TERM_ERROR, other_msc_a->c.fi);
+				else
+					msc_a_release_mo(other_msc_a, GSM_CAUSE_AUTH_FAILED);
+			} else {
+				osmo_fsm_inst_term(other_msub->fi, OSMO_FSM_TERM_ERROR, NULL);
+			}
 		}
 	}
 	if (msub->vsub) {
