@@ -56,6 +56,7 @@ static void to_null(struct osmo_fsm_inst *fi)
 	 * of an TMSI reallocation procedure. Should a failure of some sort
 	 * put us to NULL state, we have to free the pending TMSI */
 	vsub->tmsi_new = GSM_RESERVED_TMSI;
+	vlr_subscr_rehash_tmsi(vsub);
 
 	/* Make sure we remove recorded Last EUTRAN PLMN Id when UE ceases to be
 	 * available over SGs */
@@ -234,6 +235,7 @@ static void sgs_ue_fsm_associated(struct osmo_fsm_inst *fi, uint32_t event, void
 
 		vsub->tmsi = vsub->tmsi_new;
 		vsub->tmsi_new = GSM_RESERVED_TMSI;
+		vlr_subscr_rehash_tmsi(vsub);
 
 		/* Trigger sending of MM information */
 		vsub->sgs.mminfo_cb(vsub);
@@ -308,6 +310,7 @@ static int sgs_ue_fsm_timer_cb(struct osmo_fsm_inst *fi)
 		 * information, but don't change the SGs association state. */
 		vsub->tmsi_new = GSM_RESERVED_TMSI;
 		vsub->tmsi = GSM_RESERVED_TMSI;
+		vlr_subscr_rehash_tmsi(vsub);
 		break;
 	default:
 		/* Unhandled timer */

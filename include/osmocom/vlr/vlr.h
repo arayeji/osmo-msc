@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <osmocom/core/linuxlist.h>
+#include <osmocom/core/hashtable.h>
 #include <osmocom/core/fsm.h>
 #include <osmocom/core/logging.h>
 #include <osmocom/core/use_count.h>
@@ -116,6 +117,11 @@ struct vlr_instance;
  * SGSN (PS), particularly while interacting with the HLR via GSUP */
 struct vlr_subscr {
 	struct llist_head list;
+	/* Hash table nodes for O(1) lookup by IMSI / TMSI / new TMSI.
+	 * Kept in sync by vlr_subscr_rehash_imsi() / vlr_subscr_rehash_tmsi(). */
+	struct hlist_node list_by_imsi;
+	struct hlist_node list_by_tmsi;
+	struct hlist_node list_by_tmsi_new;
 	struct vlr_instance *vlr;
 
 	/* TODO either populate from HLR or drop this completely? */
@@ -264,6 +270,12 @@ struct vlr_ops {
 /* An instance of the VLR codebase */
 struct vlr_instance {
 	struct llist_head subscribers;
+	/* Hash tables for O(1) subscriber lookup. The llist above remains the
+	 * authoritative container (needed for full iteration); these are pure
+	 * lookup accelerators. 2^10 = 1024 buckets each. */
+	DECLARE_HASHTABLE(subscr_by_imsi, 10);
+	DECLARE_HASHTABLE(subscr_by_tmsi, 10);
+	DECLARE_HASHTABLE(subscr_by_tmsi_new, 10);
 	struct llist_head operations;
 	struct gsup_client_mux *gcm;
 	struct vlr_ops ops;
@@ -422,6 +434,11 @@ int vlr_subscr_alloc_tmsi(struct vlr_subscr *vsub);
 void vlr_subscr_set_imsi(struct vlr_subscr *vsub, const char *imsi);
 void vlr_subscr_set_imei(struct vlr_subscr *vsub, const char *imei);
 void vlr_subscr_set_imeisv(struct vlr_subscr *vsub, const char *imeisv);
+/* Re-insert the subscriber into the lookup hash tables. Must be called after
+ * any change to vsub->imsi (done by vlr_subscr_set_imsi()) or to
+ * vsub->tmsi / vsub->tmsi_new (call vlr_subscr_rehash_tmsi() manually). */
+void vlr_subscr_rehash_imsi(struct vlr_subscr *vsub);
+void vlr_subscr_rehash_tmsi(struct vlr_subscr *vsub);
 void vlr_subscr_set_msisdn(struct vlr_subscr *vsub, const char *msisdn);
 void vlr_subscr_set_last_used_eutran_plmn_id(struct vlr_subscr *vsub,
 					     const struct osmo_plmn_id *last_eutran_plmn);

@@ -20,6 +20,7 @@
  */
 
 #include <osmocom/core/linuxlist.h>
+#include <osmocom/core/jhash.h>
 #include <osmocom/core/fsm.h>
 #include <osmocom/core/stats.h>
 #include <osmocom/core/utils.h>
@@ -274,6 +275,34 @@ const char *vlr_subscr_msisdn_or_name(const struct vlr_subscr *vsub)
 	return vsub->msisdn;
 }
 
+static uint32_t vlr_imsi_hashkey(const char *imsi)
+{
+	return osmo_jhash(imsi, strlen(imsi), 0);
+}
+
+/*! (Re-)insert subscriber into the IMSI lookup hash table.
+ * Called by vlr_subscr_set_imsi(); no need to call manually. */
+void vlr_subscr_rehash_imsi(struct vlr_subscr *vsub)
+{
+	hash_del(&vsub->list_by_imsi);
+	if (vsub->imsi[0])
+		hash_add(vsub->vlr->subscr_by_imsi, &vsub->list_by_imsi,
+			 vlr_imsi_hashkey(vsub->imsi));
+}
+
+/*! (Re-)insert subscriber into the TMSI lookup hash tables.
+ * Must be called after any modification of vsub->tmsi or vsub->tmsi_new. */
+void vlr_subscr_rehash_tmsi(struct vlr_subscr *vsub)
+{
+	hash_del(&vsub->list_by_tmsi);
+	if (vsub->tmsi != GSM_RESERVED_TMSI)
+		hash_add(vsub->vlr->subscr_by_tmsi, &vsub->list_by_tmsi, vsub->tmsi);
+
+	hash_del(&vsub->list_by_tmsi_new);
+	if (vsub->tmsi_new != GSM_RESERVED_TMSI)
+		hash_add(vsub->vlr->subscr_by_tmsi_new, &vsub->list_by_tmsi_new, vsub->tmsi_new);
+}
+
 struct vlr_subscr *_vlr_subscr_find_by_imsi(struct vlr_instance *vlr,
 					    const char *imsi,
 					    const char *use,
@@ -284,7 +313,7 @@ struct vlr_subscr *_vlr_subscr_find_by_imsi(struct vlr_instance *vlr,
 	if (!imsi || !*imsi)
 		return NULL;
 
-	llist_for_each_entry(vsub, &vlr->subscribers, list) {
+	hash_for_each_possible(vlr->subscr_by_imsi, vsub, list_by_imsi, vlr_imsi_hashkey(imsi)) {
 		if (vlr_subscr_matches_imsi(vsub, imsi)) {
 			if (use)
 				vlr_subscr_get_src(vsub, use, file, line);
@@ -304,8 +333,14 @@ struct vlr_subscr *_vlr_subscr_find_by_tmsi(struct vlr_instance *vlr,
 	if (tmsi == GSM_RESERVED_TMSI)
 		return NULL;
 
-	llist_for_each_entry(vsub, &vlr->subscribers, list) {
-		if (vlr_subscr_matches_tmsi(vsub, tmsi)) {
+	hash_for_each_possible(vlr->subscr_by_tmsi, vsub, list_by_tmsi, tmsi) {
+		if (vsub->tmsi == tmsi) {
+			vlr_subscr_get_src(vsub, use, file, line);
+			return vsub;
+		}
+	}
+	hash_for_each_possible(vlr->subscr_by_tmsi_new, vsub, list_by_tmsi_new, tmsi) {
+		if (vsub->tmsi_new == tmsi) {
 			vlr_subscr_get_src(vsub, use, file, line);
 			return vsub;
 		}
@@ -487,6 +522,9 @@ void vlr_subscr_cancel_attach_fsm(struct vlr_subscr *vsub,
 void vlr_subscr_free(struct vlr_subscr *vsub)
 {
 	llist_del(&vsub->list);
+	hash_del(&vsub->list_by_imsi);
+	hash_del(&vsub->list_by_tmsi);
+	hash_del(&vsub->list_by_tmsi_new);
 	vlr_stat_item_dec(vsub->vlr, VLR_STAT_SUBSCRIBER_COUNT);
 	LOGVSUBP(LOGL_DEBUG, vsub, "freeing VLR subscr (max total use count was %d)\n",
 	       vsub->max_total_use_count);
@@ -545,6 +583,7 @@ int vlr_subscr_alloc_tmsi(struct vlr_subscr *vsub)
 		}
 
 		vsub->tmsi_new = tmsi;
+		vlr_subscr_rehash_tmsi(vsub);
 		vsub->vlr->ops.subscr_update(vsub);
 		return 0;
 	}
@@ -608,6 +647,7 @@ struct vlr_subscr *_vlr_subscr_find_or_create_by_tmsi(struct vlr_instance *vlr,
 		return NULL;
 	vlr_subscr_get_src(vsub, use, file, line);
 	vsub->tmsi = tmsi;
+	vlr_subscr_rehash_tmsi(vsub);
 	LOGVLR(LOGL_INFO, "New subscr, TMSI: 0x%08x\n", vsub->tmsi);
 	if (created)
 		*created = true;
@@ -683,6 +723,7 @@ void vlr_subscr_set_imsi(struct vlr_subscr *vsub, const char *imsi)
 	}
 
 	vsub->id = atoll(vsub->imsi);
+	vlr_subscr_rehash_imsi(vsub);
 	LOGVLR(LOGL_DEBUG, "set IMSI on subscriber; IMSI=%s id=%llu\n",
 	       vsub->imsi, vsub->id);
 }
@@ -1589,6 +1630,9 @@ struct vlr_instance *vlr_alloc(void *ctx, const struct vlr_ops *ops, bool is_ps)
 	OSMO_ASSERT(ops->subscr_assoc);
 
 	INIT_LLIST_HEAD(&vlr->subscribers);
+	hash_init(vlr->subscr_by_imsi);
+	hash_init(vlr->subscr_by_tmsi);
+	hash_init(vlr->subscr_by_tmsi_new);
 	INIT_LLIST_HEAD(&vlr->operations);
 	memcpy(&vlr->ops, ops, sizeof(vlr->ops));
 
