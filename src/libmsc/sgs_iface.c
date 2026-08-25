@@ -186,10 +186,21 @@ static int decode_mme_name(char *mme_name, const struct tlv_parsed *tp)
 }
 
 /* A MME FQDN was received (e.g. RESET-IND/RESET-ACK/LU-REQ) */
+void sgs_mme_detach_connection(struct sgs_connection *sgc)
+{
+	if (!sgc || !sgc->mme)
+		return;
+
+	if (sgc->mme->conn == sgc)
+		sgc->mme->conn = NULL;
+	sgc->mme = NULL;
+}
+
 static int sgs_mme_fqdn_received(struct sgs_connection *sgc, const char *mme_fqdn)
 {
 	struct sgs_mme_ctx *mme;
 	struct osmo_gummei gummei;
+	struct sgs_connection *stale;
 
 	/* caller must pass in a valid FQDN string syntax */
 	OSMO_ASSERT(osmo_parse_mme_domain(&gummei, mme_fqdn) == 0);
@@ -201,22 +212,36 @@ static int sgs_mme_fqdn_received(struct sgs_connection *sgc, const char *mme_fqd
 			mme = sgs_mme_alloc(sgc->sgs, mme_fqdn, &gummei);
 		OSMO_ASSERT(mme);
 
-		if (mme->conn) {
-			/* The MME context has another connection !?! */
-			LOGSGC(sgc, LOGL_ERROR, "Rx MME name %s, but that MME already has other "
-			       "SCTP connection?!?\n", mme_fqdn);
-			return -1;
-		} else {
-			/* associate the two */
-			mme->conn = sgc;
-			sgc->mme = mme;
+		if (mme->conn && mme->conn != sgc) {
+			stale = mme->conn;
+			LOGSGC(sgc, LOGL_NOTICE,
+			       "Replacing stale SGs link %s with %s\n",
+			       stale->sockname, sgc->sockname);
+			sgs_mme_detach_connection(stale);
+			if (stale->srv)
+				osmo_stream_srv_destroy(stale->srv);
 		}
+		mme->conn = sgc;
+		sgc->mme = mme;
 	} else {
 		mme = sgc->mme;
 		if (strcasecmp(mme->fqdn, mme_fqdn) != 0) {
 			LOGMME(mme, LOGL_ERROR, "Rx MME name \"%s\" in packet from MME \"%s\" ?!?\n", mme_fqdn,
 			       mme->fqdn);
 			return -2;
+		}
+		if (mme->conn != sgc) {
+			stale = mme->conn;
+			if (stale) {
+				LOGSGC(sgc, LOGL_NOTICE,
+				       "Adopting SGs link %s, closing stale link %s\n",
+				       sgc->sockname, stale->sockname);
+				sgs_mme_detach_connection(stale);
+				if (stale->srv)
+					osmo_stream_srv_destroy(stale->srv);
+			}
+			mme->conn = sgc;
+			sgc->mme = mme;
 		}
 	}
 	return 0;

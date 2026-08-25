@@ -99,12 +99,9 @@ static int sgs_conn_closed_cb(struct osmo_stream_srv *conn)
 	struct sgs_connection *sgc = osmo_stream_srv_get_data(conn);
 
 	LOGSGC(sgc, LOGL_NOTICE, "Connection lost\n");
-	if (sgc->mme) {
-		/* unlink ourselves from the MME context */
-		if (sgc->mme->conn == sgc)
-			sgc->mme->conn = NULL;
-	}
+	sgs_mme_detach_connection(sgc);
 	llist_del(&sgc->entry);
+	sgc->srv = NULL;
 	return 0;
 }
 

@@ -90,6 +90,12 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 		return -EINVAL;
 	}
 
+	if (vsub->sgs_fsm->state == SGS_UE_ST_LA_UPD_PRES) {
+		LOGSGS(LOGL_DEBUG, "SGs LU for %s already in progress, ignoring duplicate\n", imsi);
+		vlr_subscr_put(vsub, VSUB_USE_SGS_LU);
+		return 0;
+	}
+
 	vsub->sgs.cfg = *cfg;
 	vsub->sgs.response_cb = response_cb;
 	vsub->sgs.paging_cb = paging_cb;

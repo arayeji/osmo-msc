@@ -84,6 +84,7 @@ struct sgs_mme_ctx {
 extern struct sgs_state *g_sgs;
 
 struct sgs_state *sgs_iface_init(void *ctx, struct gsm_network *network);
+void sgs_mme_detach_connection(struct sgs_connection *sgc);
 int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg);
 enum sgsap_service_ind sgs_serv_ind_from_paging_cause(enum paging_cause);
 int sgs_iface_paging_cb(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind);
