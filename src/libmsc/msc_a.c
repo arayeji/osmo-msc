@@ -993,7 +993,8 @@ static void msc_a_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_
 	}
 
 	if (msc_a->c.ran->type == OSMO_RAT_EUTRAN_SGS) {
-		sgs_iface_tx_release(vsub);
+		if (vsub)
+			sgs_iface_tx_release(vsub);
 		/* In SGsAP there is no confirmation of a release. */
 		msc_a_state_chg(msc_a, MSC_A_ST_RELEASED);
 	} else {

@@ -1410,7 +1410,8 @@ void sgs_iface_tx_release(struct vlr_subscr *vsub)
 	struct msgb *msg_sgs;
 	struct sgs_mme_ctx *mme;
 
-	OSMO_ASSERT(vsub);
+	if (!vsub)
+		return;
 
 	mme = sgs_mme_ctx_by_vsub(vsub, SGSAP_MSGT_DL_UD);
 	if (!mme)
@@ -1427,7 +1428,8 @@ void sgs_iface_tx_serv_abrt(struct vlr_subscr *vsub)
 	struct msgb *msg_sgs;
 	struct sgs_mme_ctx *mme;
 
-	OSMO_ASSERT(vsub);
+	if (!vsub)
+		return;
 
 	/* The service abort procedure is only defined for MT calls,
 	 * see also 3GPP TS 29.118, chapter 5.13.2 */
