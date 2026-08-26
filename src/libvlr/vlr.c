@@ -200,6 +200,8 @@ struct osmo_tdef msc_tdefs_vlr[] = {
 	{ .T = 3250, .default_val = 12, .desc = "TMSI Reallocation procedure" },
 	{ .T = 3260, .default_val = 12, .desc = "Authentication procedure" },
 	{ .T = 3270, .default_val = 12, .desc = "Identification procedure" },
+	{ .T = -3212, .default_val = 0, .unit = OSMO_TDEF_M,
+	  .desc = "SGs (CSFB) subscriber expiration timeout, refreshed on each SGs LU (0 = never expire, as per spec)" },
 	{ /* terminator */ }
 };
 
@@ -829,8 +831,10 @@ void vlr_subscr_expire_lu(void *data)
 	struct timespec now;
 
 	/* Periodic location update might be disabled from the VTY,
-	 * so we shall not expire subscribers until explicit IMSI Detach. */
-	if (!vlr_timer_secs(vlr, 3212, 3312))
+	 * so we shall not expire subscribers until explicit IMSI Detach.
+	 * (Unless the X3212 SGs inactivity expiry is enabled.) */
+	if (!vlr_timer_secs(vlr, 3212, 3312)
+	    && !osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0))
 		goto done;
 
 	if (llist_empty(&vlr->subscribers))

@@ -272,10 +272,11 @@ struct vlr_instance {
 	struct llist_head subscribers;
 	/* Hash tables for O(1) subscriber lookup. The llist above remains the
 	 * authoritative container (needed for full iteration); these are pure
-	 * lookup accelerators. 2^10 = 1024 buckets each. */
-	DECLARE_HASHTABLE(subscr_by_imsi, 10);
-	DECLARE_HASHTABLE(subscr_by_tmsi, 10);
-	DECLARE_HASHTABLE(subscr_by_tmsi_new, 10);
+	 * lookup accelerators. 2^15 = 32768 buckets each, sized for several
+	 * hundred thousand attached subscribers. */
+	DECLARE_HASHTABLE(subscr_by_imsi, 15);
+	DECLARE_HASHTABLE(subscr_by_tmsi, 15);
+	DECLARE_HASHTABLE(subscr_by_tmsi_new, 15);
 	struct llist_head operations;
 	struct gsup_client_mux *gcm;
 	struct vlr_ops ops;

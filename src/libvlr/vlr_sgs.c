@@ -21,6 +21,7 @@
 #include <errno.h>
 
 #include <osmocom/core/utils.h>
+#include <osmocom/core/tdef.h>
 #include <osmocom/core/fsm.h>
 #include <osmocom/vlr/vlr.h>
 #include <osmocom/vlr/vlr_sgs.h>
@@ -112,10 +113,21 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 	vsub->cgi.lai = *new_lai;
 	vsub->cs.lac = vsub->sgs.lai.lac;
 
-	/* Subscribers that are created by the SGs location update will not
-	 * expire automatically, however a 2G LU or an implicit IMSI detach
-	 * from EPS services may change this. */
-	vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+	/* Per spec, subscribers created by an SGs location update do not
+	 * expire automatically (only a 2G LU or an implicit IMSI detach from
+	 * EPS services changes this). However, if the MME never sends detach
+	 * indications for stale UEs, the VLR grows without bound. The optional
+	 * X3212 timer (0 = disabled/spec behavior) sets an inactivity expiry
+	 * that is refreshed on each SGs LU. */
+	{
+		unsigned long x3212_secs = osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0);
+		struct timespec now;
+
+		if (x3212_secs && osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
+			vsub->expire_lu = now.tv_sec + x3212_secs;
+		else
+			vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+	}
 
 	return 0;
 }
