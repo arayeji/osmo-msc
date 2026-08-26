@@ -1107,6 +1107,19 @@ static int gsm411_mn_recv(struct gsm411_smc_inst *inst, int msg_type,
 	return rc;
 }
 
+/* Balance the use count taken by an earlier CM Service Request (SMS), if any.
+ * On SGs (SMS tunneled through the MME) there is no CM Service Request
+ * procedure at all, so a missing use count is normal there, not an error. */
+static void gsm411_put_cm_service_sms(struct gsm_trans *trans, struct msc_a *msc_a)
+{
+	if (osmo_use_count_by(&msc_a->use_count, MSC_A_USE_CM_SERVICE_SMS)) {
+		msc_a_put(msc_a, MSC_A_USE_CM_SERVICE_SMS);
+		return;
+	}
+	if (msc_a->c.ran->type != OSMO_RAT_EUTRAN_SGS)
+		LOG_TRANS(trans, LOGL_ERROR, "MO SMS without prior CM Service Request\n");
+}
+
 static struct gsm_trans *gsm411_trans_init(struct gsm_network *net, struct vlr_subscr *vsub, struct msc_a *msc_a,
 					   uint8_t tid, bool mo)
 {
@@ -1122,12 +1135,8 @@ static struct gsm_trans *gsm411_trans_init(struct gsm_network *net, struct vlr_s
 		trans->msc_a = msc_a;
 
 		osmo_fsm_inst_dispatch(msc_a->c.fi, MSC_A_EV_TRANSACTION_ACCEPTED, trans);
-		if (mo) {
-			if (!osmo_use_count_by(&msc_a->use_count, MSC_A_USE_CM_SERVICE_SMS))
-				LOG_TRANS(trans, LOGL_ERROR, "MO SMS without prior CM Service Request\n");
-			else
-				msc_a_put(msc_a, MSC_A_USE_CM_SERVICE_SMS);
-		}
+		if (mo)
+			gsm411_put_cm_service_sms(trans, msc_a);
 
 		/* If we're re-using the existing LU connection, drop the LU token.
 		 * The idea behind this timer is explained in msc_a_put_use_lu(). */
@@ -1365,10 +1374,7 @@ int gsm0411_rcv_sms(struct msc_a *msc_a, struct msgb *msg)
 			transaction_id);
 		/* Decrement use counter that has been incremented by CM Service Request (SMS).
 		 * If there is no other service request, the BSS connection will be released. */
-		if (!osmo_use_count_by(&msc_a->use_count, MSC_A_USE_CM_SERVICE_SMS))
-			LOG_TRANS(trans, LOGL_ERROR, "MO SMS without prior CM Service Request\n");
-		else
-			msc_a_put(msc_a, MSC_A_USE_CM_SERVICE_SMS);
+		gsm411_put_cm_service_sms(trans, msc_a);
 		return -EINVAL;
 	}
 
@@ -1381,10 +1387,7 @@ int gsm0411_rcv_sms(struct msc_a *msc_a, struct msgb *msg)
 					     GSM411_CP_CAUSE_NET_FAIL);
 			/* Decrement use counter that has been incremented by CM Service Request (SMS).
 			 * If there is no other service request, the BSS connection will be released. */
-			if (!osmo_use_count_by(&msc_a->use_count, MSC_A_USE_CM_SERVICE_SMS))
-				LOG_TRANS(trans, LOGL_ERROR, "MO SMS without prior CM Service Request\n");
-			else
-				msc_a_put(msc_a, MSC_A_USE_CM_SERVICE_SMS);
+			gsm411_put_cm_service_sms(trans, msc_a);
 			return -ENOMEM;
 		}
 
