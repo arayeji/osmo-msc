@@ -1668,14 +1668,25 @@ static void msc_a_up_call_assignment_complete(struct msc_a *msc_a, const struct 
 static void msc_a_up_call_assignment_failure(struct msc_a *msc_a, const struct ran_msg *af)
 {
 	struct gsm_trans *trans;
+	bool from_ran = (af != NULL);
+	bool assignment_pending = osmo_timer_pending(&msc_a->cc.assignment_request_pending);
 
 	/* Pending assignment has failed. We're no longer waiting for a response now. */
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
 
+	/* Iu RNCs send empty/late RAB Assignment Responses on live calls. Treating
+	 * those as failure used to rtp_stream_release() while MGCP MDCX is pending
+	 * and SEGV (see msc_a_abort_assignment). Ignore if we are not assigning. */
+	if (from_ran && !assignment_pending) {
+		LOG_MSC_A(msc_a, LOGL_NOTICE,
+			  "Ignoring Assignment Failure, no assignment pending\n");
+		return;
+	}
+
 	/* For a normal voice call, there will be an rtp_stream FSM. */
 	if (msc_a->cc.call_leg && msc_a->cc.call_leg->rtp[RTP_TO_RAN]) {
 		LOG_MSC_A(msc_a, LOGL_ERROR, "Assignment Failure, releasing call\n");
-		rtp_stream_release(msc_a->cc.call_leg->rtp[RTP_TO_RAN]);
+		msc_a_abort_assignment(msc_a, msc_a->cc.active_trans);
 		return;
 	}
 

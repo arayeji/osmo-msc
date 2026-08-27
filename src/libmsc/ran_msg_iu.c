@@ -186,6 +186,14 @@ static void ran_iu_decode_rab_assignment_response(struct ran_dec *ran_iu_decode,
 		goto failure;
 	}
 
+	/* Presence bit can be set with an empty SEQUENCE OF. array[0] then SEGVs. */
+	if (!ies->raB_SetupOrModifiedList.raB_SetupOrModifiedList_ies.list.count
+	    || !ies->raB_SetupOrModifiedList.raB_SetupOrModifiedList_ies.list.array
+	    || !ies->raB_SetupOrModifiedList.raB_SetupOrModifiedList_ies.list.array[0]) {
+		LOG_RAN_IU_DEC(ran_iu_decode, LOGL_ERROR, "RAB Assignment Response has empty RAB list\n");
+		goto failure;
+	}
+
 	/* So far we assign a single RAB at a time, so it should not be necessary to iterate over the list of
 	 * SetupOrModifiedList IEs and handle each one. */
 	ranap_ie = ies->raB_SetupOrModifiedList.raB_SetupOrModifiedList_ies.list.array[0];

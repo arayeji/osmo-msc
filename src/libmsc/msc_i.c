@@ -69,6 +69,11 @@ int msc_i_ready_decode_cb(struct osmo_fsm_inst *msc_i_fi, void *data, const stru
 
 	event = MSC_A_EV_FROM_I_PROCESS_ACCESS_SIGNALLING_REQUEST;
 
+	if (!msc_a) {
+		LOG_MSC_I(msc_i, LOGL_ERROR, "RAN decode with no MSC-A role, dropping\n");
+		return -EINVAL;
+	}
+
 	switch (msg->msg_type) {
 	case RAN_MSG_HANDOVER_REQUIRED:
 		if (msc_a->c.remote_to) {
