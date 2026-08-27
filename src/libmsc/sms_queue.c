@@ -561,6 +561,15 @@ static int sub_ready_for_sm(struct gsm_network *net, struct vlr_subscr *vsub)
 	if (!sms)
 		return -1;
 
+	/* Track it like sms_submit_pending(), otherwise every SGs attach
+	 * re-sends the same DB row and stacks SMS transactions. */
+	pending = sms_pending_from(net->sms_queue, sms);
+	if (!pending) {
+		LOGP(DLSMS, LOGL_ERROR, "Failed to create pending SMS entry.\n");
+		sms_free(sms);
+		return -ENOMEM;
+	}
+
 	_gsm411_send_sms(net, vsub, sms);
 	return 0;
 }

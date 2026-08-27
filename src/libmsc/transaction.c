@@ -350,15 +350,24 @@ struct gsm_trans *trans_has_conn(const struct msc_a *msc_a)
  * facilities, which will then send the necessary release indications.
  * \param[in] conn Connection that is going to be closed.
  */
-void trans_conn_closed(const struct msc_a *msc_a)
+void trans_conn_closed(struct msc_a *msc_a)
 {
 	/* As part of the CC REL_IND the remote leg might be released and this
 	 * will trigger another call to trans_free. This is something the llist
 	 * macro can not handle and we need to re-iterate the list every time.
+	 *
+	 * Hold a use count so the last SMS/CC put() cannot RELEASE+term the
+	 * SGs conn (and free msc_a) while this loop still walks it.
 	 */
 	struct gsm_trans *trans;
+
+	if (!msc_a)
+		return;
+
+	msc_a_get(msc_a, __func__);
 	while ((trans = trans_has_conn(msc_a)))
 		trans_free(trans);
+	msc_a_put(msc_a, __func__);
 }
 
 const struct value_string trans_type_names[] = {

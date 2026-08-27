@@ -198,7 +198,7 @@ void trans_free(struct gsm_trans *trans);
 int trans_assign_trans_id(const struct gsm_network *net, const struct vlr_subscr *vsub,
 			  enum trans_type type);
 struct gsm_trans *trans_has_conn(const struct msc_a *msc_a);
-void trans_conn_closed(const struct msc_a *msc_a);
+void trans_conn_closed(struct msc_a *msc_a);
 
 static inline int trans_log_subsys(enum trans_type type)
 {

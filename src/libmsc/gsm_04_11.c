@@ -1192,6 +1192,13 @@ static struct gsm_trans *gsm411_alloc_mt_trans(struct gsm_network *net,
 	struct gsm_trans *trans;
 	int tid;
 
+	/* One MT SMS at a time per subscriber. Re-entering send_sms from
+	 * trans_free/ATTACHED otherwise piles tid-0 transactions until SEGV. */
+	llist_for_each_entry(trans, &net->trans_list, entry) {
+		if (trans->vsub == vsub && trans->type == TRANS_SMS)
+			return NULL;
+	}
+
 	/* Generate a new transaction ID */
 	tid = trans_assign_trans_id(net, vsub, TRANS_SMS);
 	if (tid == -1) {
@@ -1237,9 +1244,11 @@ int gsm411_send_sms(struct gsm_network *net,
 	/* Allocate a new transaction for MT SMS */
 	trans = gsm411_alloc_mt_trans(net, vsub);
 	if (!trans) {
-		send_signal(S_SMS_UNKNOWN_ERROR, NULL, sms, 0);
+		/* Already delivering, or no resources. Leave the SMS in the DB
+		 * and do not signal error — that re-enters the queue and can
+		 * allocate another trans on a conn being torn down. */
 		sms_free(sms);
-		return -ENOMEM;
+		return -EBUSY;
 	}
 
 	/* Allocate a message buffer for to be encoded SMS */
@@ -1454,10 +1463,16 @@ void _gsm411_sms_trans_free(struct gsm_trans *trans)
 	gsm411_smc_clear(&trans->sms.smc_inst);
 
 	if (trans->sms.sms) {
-		LOG_TRANS(trans, LOGL_ERROR, "Freeing transaction that still contains an SMS -- discarding\n");
-		send_signal(S_SMS_UNKNOWN_ERROR, trans, trans->sms.sms, 0);
-		sms_free(trans->sms.sms);
+		struct gsm_sms *sms = trans->sms.sms;
 		trans->sms.sms = NULL;
+		if (trans->msc_a && msc_a_in_release(trans->msc_a)) {
+			LOG_TRANS(trans, LOGL_NOTICE, "Discarding SMS on releasing connection\n");
+			sms_free(sms);
+		} else {
+			LOG_TRANS(trans, LOGL_ERROR, "Freeing transaction that still contains an SMS -- discarding\n");
+			send_signal(S_SMS_UNKNOWN_ERROR, trans, sms, 0);
+			sms_free(sms);
+		}
 	}
 
 	if (trans->net->sms_over_gsup) {
