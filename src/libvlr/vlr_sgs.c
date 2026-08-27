@@ -50,7 +50,7 @@ const struct value_string sgs_state_counter_names[] = {
  * \param[in] mme_name If non-NULL, only that MME's subscribers; else all. */
 void vlr_sgs_reset_mme(struct vlr_instance *vlr, const char *mme_name)
 {
-	struct vlr_subscr *vsub;
+	struct vlr_subscr *vsub, *vsub_tmp;
 
 	OSMO_ASSERT(vlr);
 
@@ -59,10 +59,14 @@ void vlr_sgs_reset_mme(struct vlr_instance *vlr, const char *mme_name)
 	else
 		LOGSGS(LOGL_INFO, "dropping all SGs associations.\n");
 
-	llist_for_each_entry(vsub, &vlr->subscribers, list) {
+	/* to_null() may expire paging and free the last vsub ref. Hold a use
+	 * count and use _safe so the list walk survives that. */
+	llist_for_each_entry_safe(vsub, vsub_tmp, &vlr->subscribers, list) {
 		if (mme_name && mme_name[0] && strcasecmp(vsub->sgs.mme_name, mme_name))
 			continue;
+		vlr_subscr_get(vsub, __func__);
 		osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_RESET_FROM_MME, NULL);
+		vlr_subscr_put(vsub, __func__);
 	}
 }
 
@@ -271,7 +275,7 @@ void vlr_sgs_tmsi_reall_compl(struct vlr_instance *vlr, const char *imsi)
 
 /* Stop ongoing SGs paging: cancel Ts5 and release VSUB_USE_SGS_PAGING_REQ once.
  * Safe after Ts5 already expired (timeout already put the use-count). */
-static void vlr_sgs_pag_stop(struct vlr_subscr *vsub)
+void vlr_sgs_pag_stop(struct vlr_subscr *vsub)
 {
 	if (!osmo_timer_pending(&vsub->sgs.Ts5))
 		return;
@@ -354,11 +358,19 @@ static void Ts5_timeout_cb(void *arg)
 	LOGSGS(LOGL_ERROR, "(sub %s) Paging via SGs interface timed out (%s expired)!\n",
 	     vlr_subscr_msisdn_or_name(vsub), vlr_sgs_state_timer_name(SGS_STATE_TS5));
 
+	/* Keep vsub alive: the SGS_PAGING_REQ put below may be the last ref,
+	 * and freeing vsub here would UAF the Ts5 timer still in this callback. */
+	vlr_subscr_get(vsub, __func__);
+
+	/* Tell MSC paging (SMS/CS) the page failed. Ts5 used to only drop the
+	 * SGs ref and leave cs.is_paging set, so later paging used a freed vsub. */
+	if (vsub->cs.is_paging && vsub->sgs.paging_cb)
+		vsub->sgs.paging_cb(vsub, SGSAP_SERV_IND_PAGING_TIMEOUT);
+
 	/* Balance ref count increment from vlr_sgs_pag(). Timer is already not
 	 * pending here; late pag_rej/ack must not put again (see vlr_sgs_pag_stop). */
 	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
-
-	return;
+	vlr_subscr_put(vsub, __func__);
 }
 
 /*! Notify that a paging message has been sent and a paging is now in progress.

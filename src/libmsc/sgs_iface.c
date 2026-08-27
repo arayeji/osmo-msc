@@ -108,6 +108,8 @@ static void subscr_conn_toss(struct vlr_subscr *vsub)
 	/* Detach first so a new SGs msub can take this vsub. Do not free SMS
 	 * transactions here: the last msc_a_put() synchronously RELEASE+term
 	 * the SGs conn, and any later use of msc_a/msub is a SEGV. */
+	if (msc_a)
+		msc_a_get(msc_a, __func__);
 	msub_set_vsub(msub, NULL);
 
 	if (!msc_a) {
@@ -116,10 +118,9 @@ static void subscr_conn_toss(struct vlr_subscr *vsub)
 	}
 
 	/* Already going away; do not term (that UAF's a conn in RELEASED). */
-	if (msc_a_in_release(msc_a))
-		return;
-
-	msc_a_release_mo(msc_a, GSM_CAUSE_AUTH_FAILED);
+	if (!msc_a_in_release(msc_a))
+		msc_a_release_mo(msc_a, GSM_CAUSE_AUTH_FAILED);
+	msc_a_put(msc_a, __func__);
 }
 
 /* Allocate a new subscriber connection */

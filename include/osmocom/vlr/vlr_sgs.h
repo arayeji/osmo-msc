@@ -111,3 +111,4 @@ void vlr_sgs_pag_ack(struct vlr_instance *vlr, const char *imsi);
 void vlr_sgs_ue_unr(struct vlr_instance *vlr, const char *imsi, enum sgsap_sgs_cause cause);
 void vlr_sgs_pag(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind);
 bool vlr_sgs_pag_pend(struct vlr_subscr *vsub);
+void vlr_sgs_pag_stop(struct vlr_subscr *vsub);

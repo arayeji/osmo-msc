@@ -66,9 +66,8 @@ static void to_null(struct osmo_fsm_inst *fi)
 	if (vsub->cs.is_paging && vsub->sgs.paging_cb)
 		vsub->sgs.paging_cb(vsub, SGSAP_SERV_IND_PAGING_TIMEOUT);
 
-	/* Ensure that Ts5 (pending paging via SGs) is deleted */
-	if (vlr_sgs_pag_pend(vsub))
-		osmo_timer_del(&vsub->sgs.Ts5);
+	/* Cancel Ts5 and drop VSUB_USE_SGS_PAGING_REQ (not just the timer). */
+	vlr_sgs_pag_stop(vsub);
 }
 
 /* Initiate location update and change to SGS_UE_ST_LA_UPD_PRES state */
