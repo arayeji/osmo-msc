@@ -386,9 +386,9 @@ int msub_set_vsub(struct msub *msub, struct vlr_subscr *vsub)
 			msub_set_vsub(other_msub, NULL);
 
 			if (other_msc_a) {
-				if (msc_a_in_release(other_msc_a))
-					osmo_fsm_inst_term(other_msc_a->c.fi, OSMO_FSM_TERM_ERROR, other_msc_a->c.fi);
-				else
+				/* Do not osmo_fsm_inst_term here: that frees the
+				 * other conn under a decode/assoc stack. */
+				if (!msc_a_in_release(other_msc_a))
 					msc_a_release_mo(other_msc_a, GSM_CAUSE_AUTH_FAILED);
 			} else {
 				osmo_fsm_inst_term(other_msub->fi, OSMO_FSM_TERM_ERROR, NULL);

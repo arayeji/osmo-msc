@@ -1484,6 +1484,8 @@ static int msc_vlr_tx_lu_acc(void *msc_conn_ref, uint32_t send_tmsi, enum vlr_lu
 static int msc_vlr_tx_lu_rej(void *msc_conn_ref, enum gsm48_reject_value cause, enum vlr_lu_type lu_type)
 {
 	struct msc_a *msc_a = msc_conn_ref;
+	if (!msc_a || msc_a_in_release(msc_a))
+		return -EINVAL;
 	return gsm0408_loc_upd_rej(msc_a, cause);
 }
 

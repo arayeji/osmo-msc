@@ -1067,14 +1067,16 @@ static int assoc_lfp_with_sub(struct osmo_fsm_inst *fi, struct vlr_subscr *vsub)
 	struct lu_fsm_priv *lfp = lu_fsm_fi_priv(fi);
 	struct vlr_instance *vlr = lfp->vlr;
 
-	if (vsub->lu_fsm) {
-		LOGPFSML(fi, LOGL_ERROR,
-			 "A Location Updating process is already pending for"
-			 " this subscriber. Aborting.\n");
-		/* Also get rid of the other pending LU attempt? */
-		/*lu_fsm_failure(vsub->lu_fsm, GSM48_REJECT_CONGESTION);*/
-		lu_fsm_failure(fi, GSM48_REJECT_CONGESTION);
-		return -EINVAL;
+	if (vsub->lu_fsm && vsub->lu_fsm != fi) {
+		/* UE retried on a new conn. Aborting *this* LU used to
+		 * term the msc_a still decoding Complete L3 (SEGV).
+		 * Drop the stale LU and keep this one. */
+		LOGPFSML(fi, LOGL_NOTICE,
+			 "Replacing a pending Location Updating with this retry\n");
+		vlr_loc_update_cancel(vsub->lu_fsm, OSMO_FSM_TERM_ERROR,
+				      GSM48_REJECT_CONGESTION);
+		if (vsub->lu_fsm && vsub->lu_fsm != fi)
+			vsub->lu_fsm = NULL;
 	}
 	vsub->lu_fsm = fi;
 	/* FIXME: send new LAC to HLR? */

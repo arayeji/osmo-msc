@@ -681,13 +681,22 @@ static void assignment_request_timeout_cb(void *data);
  * call_leg_release() which races with a pending MGCP MDCX on RTP_TO_CN. */
 static void msc_a_abort_assignment(struct msc_a *msc_a, struct gsm_trans *cc_trans)
 {
+	struct call_leg *cl = msc_a->cc.call_leg;
+	int i;
+
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
-	/* trans_free first (once). Then release the call-leg: leaving RTP
-	 * alive after the CC trans is gone SEGVs on the next MGCP/RTP event. */
 	msc_a_get(msc_a, __func__);
+	/* Drop RTP backpointers before trans_free: MGCP completion later
+	 * used for_trans and SEGVd (~6s after Assignment Failure). */
+	if (cl) {
+		for (i = 0; i < ARRAY_SIZE(cl->rtp); i++) {
+			if (cl->rtp[i])
+				cl->rtp[i]->for_trans = NULL;
+		}
+	}
 	if (cc_trans)
 		trans_free(cc_trans);
-	call_leg_release(msc_a->cc.call_leg);
+	call_leg_release(cl);
 	msc_a_put(msc_a, __func__);
 }
 
