@@ -362,6 +362,13 @@ int msub_set_vsub(struct msub *msub, struct vlr_subscr *vsub)
 				replace = true;
 			else if (other_msc_a && other_msc_a->c.ran->type == OSMO_RAT_EUTRAN_SGS)
 				replace = true;
+			/* A new Iu LU while an Iu call is up used to be rejected.
+			 * assoc still overwrote vsub->msc_conn_ref, then
+			 * lu_fsm_failure tore the LU conn and SEGVd. */
+			else if (other_msc_a && other_msc_a->c.ran->type == OSMO_RAT_UTRAN_IU)
+				replace = true;
+			else if (msc_a && msc_a->complete_layer3_type == COMPLETE_LAYER3_LU)
+				replace = true;
 
 			if (!replace) {
 				LOG_MSC_A(msc_a, LOGL_ERROR,

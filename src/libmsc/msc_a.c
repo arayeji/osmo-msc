@@ -682,12 +682,12 @@ static void assignment_request_timeout_cb(void *data);
 static void msc_a_abort_assignment(struct msc_a *msc_a, struct gsm_trans *cc_trans)
 {
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
-	if (!cc_trans)
-		return;
-	/* One trans_free() only. mncc_release_ind() left the trans alive and
-	 * a later REL/conn-close freed it again (assert on vsub use-count). */
+	/* trans_free first (once). Then release the call-leg: leaving RTP
+	 * alive after the CC trans is gone SEGVs on the next MGCP/RTP event. */
 	msc_a_get(msc_a, __func__);
-	trans_free(cc_trans);
+	if (cc_trans)
+		trans_free(cc_trans);
+	call_leg_release(msc_a->cc.call_leg);
 	msc_a_put(msc_a, __func__);
 }
 

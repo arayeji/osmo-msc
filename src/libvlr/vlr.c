@@ -361,6 +361,8 @@ struct vlr_subscr *_vlr_subscr_find_by_msisdn(struct vlr_instance *vlr,
 		return NULL;
 
 	llist_for_each_entry(vsub, &vlr->subscribers, list) {
+		if (!vsub->imsi[0])
+			continue;
 		if (vlr_subscr_matches_msisdn(vsub, msisdn)) {
 			vlr_subscr_get_src(vsub, use, file, line);
 			return vsub;
@@ -703,12 +705,17 @@ static void dedup_vsub(struct vlr_subscr *exists, struct vlr_subscr *vsub)
 	 * (that SEGVd at vlr.c:689). Last put frees it. */
 	exists->imsi[0] = '\0';
 	exists->id = 0;
+	exists->msisdn[0] = '\0';
 	exists->tmsi = GSM_RESERVED_TMSI;
 	exists->tmsi_new = GSM_RESERVED_TMSI;
 	vlr_subscr_rehash_imsi(exists);
 	vlr_subscr_rehash_tmsi(exists);
 
 	vlr_subscr_cancel_attach_fsm(exists, OSMO_FSM_TERM_ERROR, GSM48_REJECT_CONGESTION);
+	/* Drop the attach token so the zombie can free; otherwise
+	 * find_by_msisdn kept returning it for MT calls. */
+	if (exists->lu_complete)
+		vlr_subscr_expire(exists);
 
 	if (osmo_use_count_total(&exists->use_count) > 1)
 		LOGVSUBP(LOGL_ERROR, vsub,

@@ -1077,14 +1077,20 @@ static int assoc_lfp_with_sub(struct osmo_fsm_inst *fi, struct vlr_subscr *vsub)
 		return -EINVAL;
 	}
 	vsub->lu_fsm = fi;
-	vsub->msc_conn_ref = lfp->msc_conn_ref;
 	/* FIXME: send new LAC to HLR? */
 	vsub->cgi.lai.lac = lfp->new_lai.lac;
 	lfp->vsub = vsub;
 	/* Tell MSC to associate this subscriber with the given
-	 * connection */
-	if (vlr->ops.subscr_assoc(lfp->msc_conn_ref, lfp->vsub))
+	 * connection. Do not overwrite msc_conn_ref first: a failed
+	 * assoc used to leave the live Iu call pointing at the LU conn
+	 * that lu_fsm_failure then released (SEGV). */
+	if (vlr->ops.subscr_assoc(lfp->msc_conn_ref, lfp->vsub)) {
+		vsub->lu_fsm = NULL;
+		lfp->vsub = NULL;
 		lu_fsm_failure(fi, GSM48_REJECT_NETWORK_FAILURE);
+		return -EINVAL;
+	}
+	vsub->msc_conn_ref = lfp->msc_conn_ref;
 	return 0;
 }
 
