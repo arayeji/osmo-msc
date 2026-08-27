@@ -125,6 +125,10 @@ static void send_signal(int sig_no,
 
 static int gsm411_sendmsg(struct gsm_trans *trans, struct msgb *msg)
 {
+	if (!trans || !trans->msc_a) {
+		msgb_free(msg);
+		return -EIO;
+	}
 	LOG_TRANS(trans, LOGL_DEBUG, "GSM4.11 TX %s\n", msgb_hexdump(msg));
 	msg->l3h = msg->data;
 	return msc_a_tx_dtap_to_i(trans->msc_a, msg);
@@ -1433,14 +1437,17 @@ int gsm0411_rcv_sms(struct msc_a *msc_a, struct msgb *msg)
 
 void _gsm411_sms_trans_free(struct gsm_trans *trans)
 {
-	/* cleanup SMS instance */
-	gsm411_smr_clear(&trans->sms.smr_inst);
+	/* Disconnect callbacks first. gsm411_smc_clear() may emit
+	 * MMSMS_REL_REQ / DATA_REQ; if mm_send is still set that recurses
+	 * into trans_free() or Tx DTAP on a connection being torn down (SEGV
+	 * when force-releasing an SGs conn that still has SMS transactions). */
 	trans->sms.smr_inst.rl_recv = NULL;
 	trans->sms.smr_inst.mn_send = NULL;
-
-	gsm411_smc_clear(&trans->sms.smc_inst);
 	trans->sms.smc_inst.mn_recv = NULL;
 	trans->sms.smc_inst.mm_send = NULL;
+
+	gsm411_smr_clear(&trans->sms.smr_inst);
+	gsm411_smc_clear(&trans->sms.smc_inst);
 
 	if (trans->sms.sms) {
 		LOG_TRANS(trans, LOGL_ERROR, "Freeing transaction that still contains an SMS -- discarding\n");

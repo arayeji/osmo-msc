@@ -40,6 +40,7 @@
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/msc_a.h>
 #include <osmocom/msc/msc_i.h>
+#include <osmocom/msc/transaction.h>
 
 #include <osmocom/msc/debug.h>
 #include <osmocom/msc/msc_api.h>
@@ -104,6 +105,12 @@ static void subscr_conn_toss(struct vlr_subscr *vsub)
 
 	LOG_MSUB(msub, LOGL_ERROR, "Force releasing previous subscriber connection: an SGs connection for this"
 		 " subscriber is being initiated\n");
+
+	/* Drop SMS/CC transactions first, while vsub is still attached.
+	 * Otherwise smc_clear() tries to Tx DTAP on a NULL vsub (SEGV) or
+	 * recurses into trans_free(). */
+	if (msc_a)
+		trans_conn_closed(msc_a);
 
 	msub_set_vsub(msub, NULL);
 
@@ -1392,7 +1399,10 @@ int sgs_iface_tx_dtap_ud(struct msc_a *msc_a, struct msgb *msg)
 	int rc = -EINVAL;
 	struct vlr_subscr *vsub = msc_a_vsub(msc_a);
 
-	OSMO_ASSERT(vsub);
+	if (!vsub) {
+		LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot Tx SGs DTAP: subscriber already detached\n");
+		goto error;
+	}
 
 	mme = sgs_mme_ctx_by_vsub(vsub, SGSAP_MSGT_DL_UD);
 	if (!mme)
