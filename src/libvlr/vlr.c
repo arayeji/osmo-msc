@@ -1427,7 +1427,22 @@ int vlr_gsup_rx(struct gsup_client_mux *gcm, void *data, const struct osmo_gsup_
 		case OSMO_GSUP_MSGT_PURGE_MS_ERROR:
 			vlr_rate_ctr_inc(vlr, VLR_CTR_GSUP_RX_PURGE_NO_SUBSCR);
 			return vlr_rx_gsup_purge_no_subscr(vlr, gsup);
+		case OSMO_GSUP_MSGT_INSERT_DATA_REQUEST:
+			/* IWF/HLR send ISD during MAP UpdateLocation. After MSC
+			 * restart, or if ISD arrives before our GSUP UL row is
+			 * visible, reject (cause 0x02) breaks the HLR update.
+			 * Create the VLR record and accept ISD. */
+			if (!gsup->imsi[0])
+				goto unknown_imsi;
+			vsub = vlr_subscr_find_or_create_by_imsi(vlr, gsup->imsi,
+								 __func__, NULL);
+			if (!vsub)
+				goto unknown_imsi;
+			LOGVSUBP(LOGL_NOTICE, vsub,
+				 "Rx GSUP ISD for IMSI not yet in VLR; created subscriber\n");
+			break;
 		default:
+unknown_imsi:
 			vlr_rate_ctr_inc(vlr, VLR_CTR_GSUP_RX_UNKNOWN_IMSI);
 			return vlr_rx_gsup_unknown_imsi(vlr, gsup);
 		}
