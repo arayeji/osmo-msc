@@ -1575,18 +1575,25 @@ static int msc_vlr_subscr_assoc(void *msc_conn_ref,
 static void msc_vlr_subscr_inval(void *msc_conn_ref, struct vlr_subscr *vsub, enum vlr_inval_reason reason)
 {
 	/* Search vsub backwards to make sure msc_conn_ref is a valid msc_a instance. */
-	struct msub *msub;
+	struct msub *msub, *msub_tmp;
 	OSMO_ASSERT(vsub);
-	llist_for_each_entry(msub, &msub_list, entry) {
+	/* _safe: release can term the current msub. Detach via msub_set_vsub
+	 * so the VSUB_USE_MSUB token is put; a raw NULL left the use count
+	 * and then vlr_subscr_free() use-after-freed. */
+	llist_for_each_entry_safe(msub, msub_tmp, &msub_list, entry) {
 		struct msc_a *msc_a;
 		if (msub->vsub != vsub)
 			continue;
 
 		msc_a = msub_msc_a(msub);
 		if (msc_a)
+			msc_a_get(msc_a, __func__);
+		msub_set_vsub(msub, NULL);
+		if (!msc_a)
+			continue;
+		if (!msc_a_in_release(msc_a))
 			msc_a_release_cn(msc_a);
-
-		msub->vsub = NULL;
+		msc_a_put(msc_a, __func__);
 	}
 }
 

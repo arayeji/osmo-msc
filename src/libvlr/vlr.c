@@ -688,12 +688,33 @@ static void dedup_vsub(struct vlr_subscr *exists, struct vlr_subscr *vsub)
 	if (exists->msc_conn_ref)
 		LOGVSUBP(LOGL_ERROR, vsub,
 			 "There is an existing VLR entry for this same subscriber with an active connection."
-			 " That should not be possible. Discarding old subscriber entry %s.\n",
+			 " That should not be possible. Detaching old subscriber entry %s.\n",
 			 exists->imsi);
+
+	/* Hold a ref so cancel/inval cannot free exists under us. */
+	vlr_subscr_get(exists, "dedup");
 
 	if (vlr->ops.subscr_inval)
 		vlr->ops.subscr_inval(exists->msc_conn_ref, exists, VLR_INVAL_REASON_DUPLICATE_SUBSCR);
-	vlr_subscr_free(exists);
+	exists->msc_conn_ref = NULL;
+
+	/* Drop identity so the new vsub can own IMSI/TMSI. Do not
+	 * talloc_free while trans/msc_a/SGs still hold the old entry
+	 * (that SEGVd at vlr.c:689). Last put frees it. */
+	exists->imsi[0] = '\0';
+	exists->id = 0;
+	exists->tmsi = GSM_RESERVED_TMSI;
+	exists->tmsi_new = GSM_RESERVED_TMSI;
+	vlr_subscr_rehash_imsi(exists);
+	vlr_subscr_rehash_tmsi(exists);
+
+	vlr_subscr_cancel_attach_fsm(exists, OSMO_FSM_TERM_ERROR, GSM48_REJECT_CONGESTION);
+
+	if (osmo_use_count_total(&exists->use_count) > 1)
+		LOGVSUBP(LOGL_ERROR, vsub,
+			 "Keeping duplicate VLR entry until last use is dropped (still used by %s)\n",
+			 osmo_use_count_to_str_c(OTC_SELECT, &exists->use_count));
+	vlr_subscr_put(exists, "dedup");
 }
 
 void vlr_subscr_set_imsi(struct vlr_subscr *vsub, const char *imsi)
