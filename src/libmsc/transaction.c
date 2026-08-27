@@ -239,6 +239,18 @@ void trans_free(struct gsm_trans *trans)
 {
 	const char *usage_token;
 	struct msc_a *msc_a;
+	struct vlr_subscr *vsub;
+	const char *vsub_use;
+
+	if (!trans)
+		return;
+	if (trans->freeing)
+		return;
+	trans->freeing = true;
+
+	/* Unlink first so CC/MNCC/SMS cleanup cannot find and free us again. */
+	llist_del(&trans->entry);
+	INIT_LLIST_HEAD(&trans->entry);
 
 	LOG_TRANS(trans, LOGL_DEBUG, "Freeing transaction\n");
 
@@ -277,15 +289,24 @@ void trans_free(struct gsm_trans *trans)
 		trans->paging_request = NULL;
 	}
 
-	if (trans->vsub) {
-		vlr_subscr_put(trans->vsub, trans_vsub_use(trans->type));
-		trans->vsub = NULL;
+	vsub = trans->vsub;
+	trans->vsub = NULL;
+	if (vsub) {
+		vsub_use = trans_vsub_use(trans->type);
+		/* vlr_subscr_put() is OSMO_ASSERT: a missing token used to
+		 * abort the whole MSC (transaction.c:281). */
+		if (osmo_use_count_by(&vsub->use_count, vsub_use)) {
+			vlr_subscr_put(vsub, vsub_use);
+		} else {
+			LOGP(DMSC, LOGL_ERROR,
+			     "trans_free: %s use already gone on %s\n",
+			     vsub_use, vlr_subscr_name(vsub));
+		}
 	}
 
 	msc_a = trans->msc_a;
 	trans->msc_a = NULL;
 
-	llist_del(&trans->entry);
 	talloc_free(trans);
 
 	if (msc_a && usage_token)

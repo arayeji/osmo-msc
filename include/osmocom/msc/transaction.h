@@ -94,6 +94,9 @@ struct gsm_trans {
 	/* is thats one paging? */
 	struct paging_request *paging_request;
 
+	/* trans_free() is re-entered from CC/MNCC/SMS cleanup. */
+	bool freeing;
+
 	/* bearer capabilities (rate and codec) */
 	struct gsm_mncc_bearer_cap bearer_cap;
 

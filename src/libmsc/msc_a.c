@@ -684,11 +684,10 @@ static void msc_a_abort_assignment(struct msc_a *msc_a, struct gsm_trans *cc_tra
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
 	if (!cc_trans)
 		return;
-	/* Hold the conn: MNCC/CC release can drop the last use synchronously. */
+	/* One trans_free() only. mncc_release_ind() left the trans alive and
+	 * a later REL/conn-close freed it again (assert on vsub use-count). */
 	msc_a_get(msc_a, __func__);
-	mncc_release_ind(cc_trans->net, cc_trans, cc_trans->callref,
-			 GSM48_CAUSE_LOC_PRN_S_LU,
-			 GSM48_CC_CAUSE_INCOMPAT_DEST);
+	trans_free(cc_trans);
 	msc_a_put(msc_a, __func__);
 }
 
