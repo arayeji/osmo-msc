@@ -50,10 +50,13 @@ static void paging_response_timer_cb(void *data)
 {
 	struct vlr_subscr *vsub = data;
 
+	/* paging_expired() may put the last VSUB_USE_PAGING. */
+	vlr_subscr_get(vsub, __func__);
 	if (vsub->cs.attached_via_ran == OSMO_RAT_EUTRAN_SGS)
 		sgs_iface_tx_serv_abrt(vsub);
 
 	paging_expired(vsub);
+	vlr_subscr_put(vsub, __func__);
 }
 
 /* Execute a paging on the currently active RAN. Returns the number of

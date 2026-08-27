@@ -175,19 +175,20 @@ static void mmsms_paging_cb(struct msc_a *msc_a, struct gsm_trans *trans)
 		/* Confirm successful connection establishment */
 		gsm411_smc_recv(&trans->sms.smc_inst, GSM411_MMSMS_EST_CNF, NULL, 0);
 	} else {
-		/* Paging expired or failed */
-		/* Inform SMC about channel establishment failure */
-		gsm411_smc_recv(&trans->sms.smc_inst, GSM411_MMSMS_REL_IND, NULL, 0);
+		/* Paging expired or failed. Do not gsm411_smc_recv(REL_IND):
+		 * SMC may mm_send REL_REQ → trans_free, then we free again. */
+		trans->sms.smr_inst.rl_recv = NULL;
+		trans->sms.smr_inst.mn_send = NULL;
+		trans->sms.smc_inst.mn_recv = NULL;
+		trans->sms.smc_inst.mm_send = NULL;
 
 		/* gsm411_send_rp_data() doesn't set trans->sms.sms */
 		if (sms != NULL) {
-			/* Notify the SMSqueue and free stored SMS */
-			send_signal(S_SMS_UNKNOWN_ERROR, NULL, sms, 0);
 			trans->sms.sms = NULL;
+			send_signal(S_SMS_UNKNOWN_ERROR, NULL, sms, 0);
 			sms_free(sms);
 		}
 
-		/* Destroy this transaction */
 		trans_free(trans);
 	}
 }

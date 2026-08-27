@@ -62,12 +62,13 @@ static void to_null(struct osmo_fsm_inst *fi)
 	 * available over SGs */
 	vlr_subscr_set_last_used_eutran_plmn_id(vsub, NULL);
 
-	/* Make sure any ongoing paging is aborted. */
+	/* paging_expired() may drop VSUB_USE_PAGING; pag_stop() drops
+	 * SGS_PAGING_REQ. Hold vsub across both so neither frees it here. */
+	vlr_subscr_get(vsub, __func__);
 	if (vsub->cs.is_paging && vsub->sgs.paging_cb)
 		vsub->sgs.paging_cb(vsub, SGSAP_SERV_IND_PAGING_TIMEOUT);
-
-	/* Cancel Ts5 and drop VSUB_USE_SGS_PAGING_REQ (not just the timer). */
 	vlr_sgs_pag_stop(vsub);
+	vlr_subscr_put(vsub, __func__);
 }
 
 /* Initiate location update and change to SGS_UE_ST_LA_UPD_PRES state */
@@ -110,11 +111,9 @@ error:
 static void respawn_paging(struct vlr_subscr *vsub)
 {
 	if (vlr_sgs_pag_pend(vsub)) {
-
-		/* Delete the old paging timer first. */
-		osmo_timer_del(&vsub->sgs.Ts5);
-
-		/* Issue a fresh paging request */
+		/* Drop the old Ts5 ref, then send a new page (new Ts5 + get).
+		 * Bare timer_del leaked VSUB_USE_SGS_PAGING_REQ on each LU. */
+		vlr_sgs_pag_stop(vsub);
 		vsub->sgs.paging_cb(vsub, vsub->sgs.paging_serv_ind);
 	}
 }

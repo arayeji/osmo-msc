@@ -531,8 +531,10 @@ void vlr_subscr_free(struct vlr_subscr *vsub)
 	LOGVSUBP(LOGL_DEBUG, vsub, "freeing VLR subscr (max total use count was %d)\n",
 	       vsub->max_total_use_count);
 
-	/* Make sure SGs timer Ts5 is removed */
+	/* Pending osmo_timer_list nodes are not talloc children. If either
+	 * still runs, the next tick use-after-frees this subscriber (SEGV). */
 	osmo_timer_del(&vsub->sgs.Ts5);
+	osmo_timer_del(&vsub->cs.paging_response_timer);
 
 	/* Remove SGs FSM (see also: sgs_iface.c) */
 	vlr_sgs_fsm_remove(vsub);
