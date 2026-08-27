@@ -182,8 +182,10 @@ static void ran_iu_decode_rab_assignment_response(struct ran_dec *ran_iu_decode,
 	bool free_ies = false;
 
 	if (!(ies->presenceMask & RAB_ASSIGNMENTRESPONSEIES_RANAP_RAB_SETUPORMODIFIEDLIST_PRESENT)) {
+		/* RNC sends these constantly. Treating them as Assignment Failure
+		 * released live calls (rtp/MNCC) and SEGVd. Wait for T-37 instead. */
 		LOG_RAN_IU_DEC(ran_iu_decode, LOGL_ERROR, "RAB Assignment Response does not contain RAB information\n");
-		goto failure;
+		return;
 	}
 
 	/* Presence bit can be set with an empty SEQUENCE OF. array[0] then SEGVs. */
@@ -191,7 +193,7 @@ static void ran_iu_decode_rab_assignment_response(struct ran_dec *ran_iu_decode,
 	    || !ies->raB_SetupOrModifiedList.raB_SetupOrModifiedList_ies.list.array
 	    || !ies->raB_SetupOrModifiedList.raB_SetupOrModifiedList_ies.list.array[0]) {
 		LOG_RAN_IU_DEC(ran_iu_decode, LOGL_ERROR, "RAB Assignment Response has empty RAB list\n");
-		goto failure;
+		return;
 	}
 
 	/* So far we assign a single RAB at a time, so it should not be necessary to iterate over the list of
@@ -201,24 +203,16 @@ static void ran_iu_decode_rab_assignment_response(struct ran_dec *ran_iu_decode,
 	rc = ranap_decode_rab_setupormodifieditemies_fromlist(&setup_ies, &ranap_ie->value);
 	if (rc) {
 		LOG_RAN_IU_DEC(ran_iu_decode, LOGL_ERROR, "Error in ranap_decode_rab_setupormodifieditemies(): rc=%d\n", rc);
-		goto failure;
+		return;
 	}
 	free_ies = true;
 
-	if (!ran_iu_decode_rab_assignment_response_decode_setup_ies(ran_iu_decode, &ran_dec_msg, &setup_ies))
-		goto success;
+	if (ran_iu_decode_rab_assignment_response_decode_setup_ies(ran_iu_decode, &ran_dec_msg, &setup_ies)) {
+		if (free_ies)
+			ranap_free_rab_setupormodifieditemies(&setup_ies);
+		return;
+	}
 
-failure:
-	ran_dec_msg = (struct ran_msg){
-		.msg_type = RAN_MSG_ASSIGNMENT_FAILURE,
-		.msg_name = "RANAP RAB Assignment Response: Failure",
-		.assignment_failure = {
-			.bssap_cause = RAN_MSG_BSSAP_CAUSE_UNSET,
-			.rr_cause = GSM48_RR_CAUSE_ABNORMAL_UNSPEC,
-		},
-	};
-
-success:
 	ran_decoded(ran_iu_decode, &ran_dec_msg);
 
 	if (free_ies)

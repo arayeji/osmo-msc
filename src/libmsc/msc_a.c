@@ -682,11 +682,14 @@ static void assignment_request_timeout_cb(void *data);
 static void msc_a_abort_assignment(struct msc_a *msc_a, struct gsm_trans *cc_trans)
 {
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
-	if (cc_trans) {
-		mncc_release_ind(cc_trans->net, cc_trans, cc_trans->callref,
-				 GSM48_CAUSE_LOC_PRN_S_LU,
-				 GSM48_CC_CAUSE_INCOMPAT_DEST);
-	}
+	if (!cc_trans)
+		return;
+	/* Hold the conn: MNCC/CC release can drop the last use synchronously. */
+	msc_a_get(msc_a, __func__);
+	mncc_release_ind(cc_trans->net, cc_trans, cc_trans->callref,
+			 GSM48_CAUSE_LOC_PRN_S_LU,
+			 GSM48_CC_CAUSE_INCOMPAT_DEST);
+	msc_a_put(msc_a, __func__);
 }
 
 /* The MGW has given us a local IP address for the RAN side. Ready to start the Assignment of a voice channel. */
