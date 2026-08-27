@@ -19,6 +19,10 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #include <osmocom/msc/sgs_iface.h>
 #include <osmocom/msc/debug.h>
@@ -32,65 +36,159 @@
 #define LOGSGC(sgc, lvl, fmt, args...) \
 	LOGP(DSGS, lvl, "%s: " fmt, (sgc)->sockname, ## args)
 
+static const char *sgs_sctp_assoc_chg_name(uint8_t state)
+{
+	switch (state) {
+	case SCTP_COMM_UP:
+		return "COMM_UP";
+	case SCTP_COMM_LOST:
+		return "COMM_LOST";
+	case SCTP_RESTART:
+		return "RESTART";
+	case SCTP_SHUTDOWN_COMP:
+		return "SHUTDOWN_COMP";
+	case SCTP_CANT_STR_ASSOC:
+		return "CANT_STR_ASSOC";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+static bool sgs_fd_remote_ip(int fd, char *buf, size_t buflen)
+{
+	struct sockaddr_storage ss;
+	socklen_t slen = sizeof(ss);
+
+	if (getpeername(fd, (struct sockaddr *)&ss, &slen) < 0)
+		return false;
+	if (ss.ss_family == AF_INET)
+		return inet_ntop(AF_INET, &((struct sockaddr_in *)&ss)->sin_addr, buf, buflen) != NULL;
+	if (ss.ss_family == AF_INET6)
+		return inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&ss)->sin6_addr, buf, buflen) != NULL;
+	return false;
+}
+
+/* Close every existing SGs SCTP from the same remote IP. After an MME restart
+ * the kernel often keeps the old association ESTAB until heartbeat timeout while
+ * the MME already opened a new one; paging would keep going out on the dead
+ * link and the new socket's recv queue would never be the one mme->conn reads. */
+static void sgs_close_replaced_peer_conns(struct sgs_state *sgs, int new_fd)
+{
+	struct sgs_connection *sgc, *tmp;
+	char new_ip[INET6_ADDRSTRLEN];
+	char old_ip[INET6_ADDRSTRLEN];
+
+	if (!sgs_fd_remote_ip(new_fd, new_ip, sizeof(new_ip)))
+		return;
+
+	llist_for_each_entry_safe(sgc, tmp, &sgs->conn_list, entry) {
+		int fd;
+
+		if (!sgc->srv)
+			continue;
+		fd = osmo_stream_srv_get_ofd(sgc->srv)->fd;
+		if (!sgs_fd_remote_ip(fd, old_ip, sizeof(old_ip)))
+			continue;
+		if (strcmp(old_ip, new_ip) != 0)
+			continue;
+		LOGSGC(sgc, LOGL_NOTICE,
+		       "Closing SGs link replaced by a new connection from %s\n", new_ip);
+		osmo_stream_srv_destroy(sgc->srv);
+	}
+}
+
+/* Handle one SCTP notification. Returns -EBADF if the connection was destroyed. */
+static int sgs_conn_handle_sctp_notif(struct osmo_stream_srv *conn, struct sgs_connection *sgc,
+				      struct msgb *msg)
+{
+	union sctp_notification *notif = (union sctp_notification *)msgb_data(msg);
+
+	switch (notif->sn_header.sn_type) {
+	case SCTP_ASSOC_CHANGE:
+		LOGSGC(sgc, LOGL_NOTICE, "SCTP_ASSOC_CHANGE %s\n",
+		       sgs_sctp_assoc_chg_name(notif->sn_assoc_change.sac_state));
+		switch (notif->sn_assoc_change.sac_state) {
+		case SCTP_COMM_LOST:
+		case SCTP_SHUTDOWN_COMP:
+		case SCTP_CANT_STR_ASSOC:
+			osmo_stream_srv_destroy(conn);
+			return -EBADF;
+		case SCTP_RESTART:
+			/* MME restarted: same accepted socket, new association.
+			 * Keep reading — do not destroy. */
+			LOGSGC(sgc, LOGL_NOTICE,
+			       "SCTP association restarted (MME reboot); keeping SGs link\n");
+			break;
+		default:
+			break;
+		}
+		break;
+	case SCTP_SHUTDOWN_EVENT:
+		/* Peer started a graceful shutdown. A rebooted MME often
+		 * follows this with SCTP_RESTART on the same fd. Destroying
+		 * here is what wedged SGs: we closed the socket the restart
+		 * would have reused, and inbound LU sat unread. */
+		LOGSGC(sgc, LOGL_NOTICE,
+		       "SCTP_SHUTDOWN_EVENT; keeping socket for a possible SCTP RESTART\n");
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+
 /* call-back when data arrives on SGs */
 static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 {
 	struct osmo_fd *ofd = osmo_stream_srv_get_ofd(conn);
 	struct sgs_connection *sgc = osmo_stream_srv_get_data(conn);
-	struct msgb *msg = gsm29118_msgb_alloc();
-	struct sctp_sndrcvinfo sinfo;
-	int flags = 0;
-	int rc = 0;
 
-	/* we cannot use osmo_stream_srv_recv() here, as we might get some out-of-band info from
-	 * SCTP. FIXME: add something like osmo_stream_srv_recv_sctp() to libosmo-netif and use
-	 * it here as well as in libosmo-sigtran */
-	rc = sctp_recvmsg(ofd->fd, msgb_data(msg), msgb_tailroom(msg), NULL, NULL, &sinfo, &flags);
-	if (rc < 0) {
-		osmo_stream_srv_destroy(conn);
-		rc = -EBADF;
-		goto out;
-	} else if (rc == 0) {
-		osmo_stream_srv_destroy(conn);
-		rc = -EBADF;
-		goto out;
-	} else {
-		msgb_put(msg, rc);
-	}
+	/* Drain until EAGAIN so a SHUTDOWN notification plus the following
+	 * RESTART/user-data are all handled in this wakeup. One recv per
+	 * select() left the socket readable with a 200KB+ kernel queue while
+	 * the process sat in poll() after we had already destroyed it. */
+	for (;;) {
+		struct msgb *msg = gsm29118_msgb_alloc();
+		struct sctp_sndrcvinfo sinfo;
+		int flags = 0;
+		int rc;
 
-	if (flags & MSG_NOTIFICATION) {
-		union sctp_notification *notif = (union sctp_notification *)msgb_data(msg);
-
-		switch (notif->sn_header.sn_type) {
-		case SCTP_SHUTDOWN_EVENT:
+		rc = sctp_recvmsg(ofd->fd, msgb_data(msg), msgb_tailroom(msg),
+				  NULL, NULL, &sinfo, &flags);
+		if (rc < 0) {
+			msgb_free(msg);
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+				return 0;
+			LOGSGC(sgc, LOGL_NOTICE, "SCTP recv error: %s\n", strerror(errno));
 			osmo_stream_srv_destroy(conn);
-			rc = -EBADF;
-			break;
-		case SCTP_ASSOC_CHANGE:
-			/* FIXME: do we have to notify the SGs code about this? */
-			break;
-		default:
-			break;
+			return -EBADF;
 		}
-		goto out;
+		if (rc == 0) {
+			msgb_free(msg);
+			osmo_stream_srv_destroy(conn);
+			return -EBADF;
+		}
+		msgb_put(msg, rc);
+
+		if (flags & MSG_NOTIFICATION) {
+			rc = sgs_conn_handle_sctp_notif(conn, sgc, msg);
+			msgb_free(msg);
+			if (rc < 0)
+				return rc;
+			continue;
+		}
+
+		msg->l2h = msgb_data(msg);
+
+		if (msgb_sctp_ppid(msg) != 0) {
+			LOGSGC(sgc, LOGL_NOTICE, "Ignoring SCTP PPID %ld (spec violation)\n",
+			       msgb_sctp_ppid(msg));
+			msgb_free(msg);
+			continue;
+		}
+
+		sgs_iface_rx(sgc, msg);
 	}
-
-	/* set l2 header, as that's what we use in SGs code */
-	msg->l2h = msgb_data(msg);
-
-	if (msgb_sctp_ppid(msg) != 0) {
-		LOGSGC(sgc, LOGL_NOTICE, "Ignoring SCTP PPID %ld (spec violation)\n", msgb_sctp_ppid(msg));
-		msgb_free(msg);
-		return 0;
-	}
-
-	/* handle message */
-	sgs_iface_rx(sgc, msg);
-
-	return 0;
-out:
-	msgb_free(msg);
-	return rc;
 }
 
 /* call-back when new connection is closed ed on SGs */
@@ -113,10 +211,16 @@ static int sgs_accept_cb(struct osmo_stream_srv_link *link, int fd)
 	OSMO_ASSERT(sgc);
 	sgc->sgs = sgs;
 	osmo_sock_get_name_buf(sgc->sockname, sizeof(sgc->sockname), fd);
+	sgs_close_replaced_peer_conns(sgs, fd);
 	sgc->srv = osmo_stream_srv_create(sgc, link, fd, sgs_conn_readable_cb, sgs_conn_closed_cb, sgc);
 	if (!sgc->srv) {
 		talloc_free(sgc);
 		return -1;
+	}
+	{
+		int fl = fcntl(fd, F_GETFL);
+		if (fl >= 0)
+			fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 	}
 	LOGSGC(sgc, LOGL_INFO, "Accepted new SGs connection\n");
 	llist_add_tail(&sgc->entry, &sgs->conn_list);

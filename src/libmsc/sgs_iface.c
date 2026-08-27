@@ -402,8 +402,8 @@ static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg)
 	}
 
 	msgb_sctp_ppid(msg) = 0;
-	if (!sgc) {
-		LOGP(LOGL_NOTICE, DSGS, "Cannot transmit %s: connection dead. Discarding\n",
+	if (!sgc || !sgc->srv) {
+		LOGP(DSGS, LOGL_NOTICE, "Cannot transmit %s: connection dead. Discarding\n",
 		     sgsap_msg_type_name(msg->data[0]));
 		msgb_free(msg);
 		return;
