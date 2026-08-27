@@ -102,7 +102,10 @@ static void perform_lu(struct osmo_fsm_inst *fi)
 
 error:
 	to_null(fi);
-	sgs_lu_response.error = true;
+	/* Reject this LU only. error=true used to trigger SGs RESET-IND
+	 * per failed HLR send and melt the MME when GSUP was down. */
+	sgs_lu_response.accepted = false;
+	sgs_lu_response.error = false;
 	sgs_lu_response.vsub = vsub;
 	vsub->sgs.response_cb(&sgs_lu_response);
 }

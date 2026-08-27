@@ -33,6 +33,8 @@
 
 #include <osmocom/netif/stream.h>
 
+#include <osmocom/gsupclient/gsup_client.h>
+#include <osmocom/gsupclient/gsup_client_mux.h>
 #include <osmocom/vlr/vlr.h>
 #include <osmocom/vlr/vlr_sgs.h>
 #include <osmocom/msc/gsm_data.h>
@@ -55,6 +57,13 @@
  * there can only be one gsm_network per MSC. The pointer is set once
  * when calling sgs_iface_init() */
 static struct gsm_network *gsm_network = NULL;
+
+static bool sgs_gsup_is_up(void)
+{
+	if (!gsm_network || !gsm_network->gcm || !gsm_network->gcm->gsup_client)
+		return false;
+	return osmo_gsup_client_is_connected(gsm_network->gcm->gsup_client);
+}
 
 static struct osmo_fsm sgs_vlr_reset_fsm;
 static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg);
@@ -196,6 +205,13 @@ static void sgs_mme_maybe_vlr_reset(struct sgs_mme_ctx *mme)
 		return;
 	if (mme->fi->state != SGS_VLRR_ST_NULL)
 		return;
+	/* RESET makes the MME re-LU the whole VLR. Do not start that while
+	 * GSUP is down — every LU fails and used to RESET again. */
+	if (!sgs_gsup_is_up()) {
+		LOGMME(mme, LOGL_NOTICE,
+		       "VLR reset deferred: GSUP not connected\n");
+		return;
+	}
 
 	LOGMME(mme, LOGL_NOTICE,
 	       "VLR reset: sending SGsAP-RESET-INDICATION (TS 29.118 5.7)\n");
@@ -506,9 +522,15 @@ static void sgs_tx_loc_upd_resp_cb(struct sgs_lu_response *response)
 	if (!mme)
 		return;
 
-	/* Handle error (HLR failure) */
+	/* A single HLR/GSUP failure is not a VLR reset. Sending RESET-IND
+	 * here made the MME re-LU everyone; each fail RESET again (hang). */
 	if (response->error) {
-		osmo_fsm_inst_dispatch(mme->fi, SGS_VLRR_E_START_RESET, NULL);
+		resp = gsm29118_create_lu_rej(vsub->imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, &vsub->sgs.lai);
+		if (mme->conn)
+			sgs_tx(mme->conn, resp);
+		else
+			msgb_free(resp);
+		vlr_sgs_loc_update_rej_sent(vsub);
 		return;
 	}
 
@@ -734,6 +756,12 @@ static int sgs_rx_loc_upd_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	struct vlr_sgs_cfg vlr_sgs_cfg;
 	struct vlr_subscr *vsub;
 	struct osmo_plmn_id last_eutran_plmn_buf, *last_eutran_plmn = NULL;
+
+	if (!sgs_gsup_is_up()) {
+		resp = gsm29118_create_lu_rej(imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, NULL);
+		sgs_tx(sgc, resp);
+		return 0;
+	}
 
 	/* Check for lingering connections */
 	vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
