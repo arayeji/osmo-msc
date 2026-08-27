@@ -45,19 +45,30 @@ const struct value_string sgs_state_counter_names[] = {
 	{0, NULL}
 };
 
-/* Reset all SGs-Associations back to zero.
- * \param[in] vlr VLR instance. */
-void vlr_sgs_reset(struct vlr_instance *vlr)
+/* Reset SGs-Associations back to NULL (29.118 5.7 VLR / 5.8 MME failure).
+ * \param[in] vlr VLR instance.
+ * \param[in] mme_name If non-NULL, only that MME's subscribers; else all. */
+void vlr_sgs_reset_mme(struct vlr_instance *vlr, const char *mme_name)
 {
 	struct vlr_subscr *vsub;
 
 	OSMO_ASSERT(vlr);
 
-	LOGSGS(LOGL_INFO, "dropping all SGs associations.\n");
+	if (mme_name && mme_name[0])
+		LOGSGS(LOGL_INFO, "dropping SGs associations for MME %s.\n", mme_name);
+	else
+		LOGSGS(LOGL_INFO, "dropping all SGs associations.\n");
 
 	llist_for_each_entry(vsub, &vlr->subscribers, list) {
+		if (mme_name && mme_name[0] && strcasecmp(vsub->sgs.mme_name, mme_name))
+			continue;
 		osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_RESET_FROM_MME, NULL);
 	}
+}
+
+void vlr_sgs_reset(struct vlr_instance *vlr)
+{
+	vlr_sgs_reset_mme(vlr, NULL);
 }
 
 /*! Perform an SGs location update.

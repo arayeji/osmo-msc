@@ -94,6 +94,8 @@ struct vlr_sgs_cfg {
 };
 
 void vlr_sgs_reset(struct vlr_instance *vlr);
+/* Drop SGs associations for one MME (NULL mme_name = all). 29.118 5.7/5.8. */
+void vlr_sgs_reset_mme(struct vlr_instance *vlr, const char *mme_name);
 int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 		       vlr_sgs_lu_response_cb_t response_cb, vlr_sgs_lu_paging_cb_t paging_cb,
 		       vlr_sgs_lu_mminfo_cb_t mminfo_cb, char *mme_name, enum vlr_lu_type type, const char *imsi,

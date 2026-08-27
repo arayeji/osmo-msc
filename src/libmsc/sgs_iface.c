@@ -186,6 +186,21 @@ static struct sgs_mme_ctx *sgs_mme_alloc(struct sgs_state *sgs, const char *mme_
 	return mme;
 }
 
+/* 3GPP TS 29.118 5.7 VLR Reset: after this process starts the FSM is
+ * SGS_VLRR_ST_NULL. Send RESET-IND once; do not send again after COMPLETE
+ * (MME SCTP reconnect while this MSC is still up). */
+static void sgs_mme_maybe_vlr_reset(struct sgs_mme_ctx *mme)
+{
+	if (!mme || !mme->fi || !mme->conn)
+		return;
+	if (mme->fi->state != SGS_VLRR_ST_NULL)
+		return;
+
+	LOGMME(mme, LOGL_NOTICE,
+	       "VLR reset: sending SGsAP-RESET-INDICATION (TS 29.118 5.7)\n");
+	osmo_fsm_inst_dispatch(mme->fi, SGS_VLRR_E_START_RESET, NULL);
+}
+
 /* Decode and verify MME name */
 static int decode_mme_name(char *mme_name, const struct tlv_parsed *tp)
 {
@@ -270,6 +285,8 @@ static int sgs_mme_fqdn_received(struct sgs_connection *sgc, const char *mme_fqd
 			sgc->mme = mme;
 		}
 	}
+
+	sgs_mme_maybe_vlr_reset(mme);
 	return 0;
 }
 
@@ -684,8 +701,11 @@ static int sgs_rx_reset_ind(struct sgs_connection *sgc, struct msgb *msg, const 
 
 	resp = gsm29118_create_reset_ack(&reset_params);
 
-	/* Perform a reset of the SGS FSM of all subscribers that are present in the VLR */
-	vlr_sgs_reset(gsm_network->vlr);
+	/* MME failure (29.118 5.8): drop SGs assoc for this MME only */
+	if (sgc->mme)
+		vlr_sgs_reset_mme(gsm_network->vlr, sgc->mme->fqdn);
+	else
+		vlr_sgs_reset(gsm_network->vlr);
 
 	sgs_tx(sgc, resp);
 	return 0;
@@ -1299,6 +1319,10 @@ static void sgs_vlr_reset_fsm_allstate(struct osmo_fsm_inst *fi, uint32_t event,
 
 	switch (event) {
 	case SGS_VLRR_E_START_RESET:
+		if (!sgc) {
+			LOGMME(mme, LOGL_ERROR, "VLR reset: no SGs connection, cannot send RESET-IND\n");
+			return;
+		}
 		osmo_fsm_inst_state_chg(fi, SGS_VLRR_ST_NULL, 0, 0);
 		mme->ns11_remaining = sgs->cfg.counter[SGS_STATE_NS11];
 		/* send a reset message and enter WAIT_ACK state */
@@ -1308,8 +1332,8 @@ static void sgs_vlr_reset_fsm_allstate(struct osmo_fsm_inst *fi, uint32_t event,
 		reset_ind = gsm29118_create_reset_ind(&reset_params);
 		sgs_tx(sgc, reset_ind);
 
-		/* Perform a reset of the SGS FSM of all subscribers that are present in the VLR */
-		vlr_sgs_reset(gsm_network->vlr);
+		/* VLR restart toward this MME only (do not wipe other MMEs) */
+		vlr_sgs_reset_mme(gsm_network->vlr, mme->fqdn);
 
 		osmo_fsm_inst_state_chg(fi, SGS_VLRR_ST_WAIT_ACK, sgs->cfg.timer[SGS_STATE_TS11], 11);
 		break;
