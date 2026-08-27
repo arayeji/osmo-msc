@@ -40,7 +40,6 @@
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/msc_a.h>
 #include <osmocom/msc/msc_i.h>
-#include <osmocom/msc/transaction.h>
 
 #include <osmocom/msc/debug.h>
 #include <osmocom/msc/msc_api.h>
@@ -106,12 +105,9 @@ static void subscr_conn_toss(struct vlr_subscr *vsub)
 	LOG_MSUB(msub, LOGL_ERROR, "Force releasing previous subscriber connection: an SGs connection for this"
 		 " subscriber is being initiated\n");
 
-	/* Drop SMS/CC transactions first, while vsub is still attached.
-	 * Otherwise smc_clear() tries to Tx DTAP on a NULL vsub (SEGV) or
-	 * recurses into trans_free(). */
-	if (msc_a)
-		trans_conn_closed(msc_a);
-
+	/* Detach first so a new SGs msub can take this vsub. Do not free SMS
+	 * transactions here: the last msc_a_put() synchronously RELEASE+term
+	 * the SGs conn, and any later use of msc_a/msub is a SEGV. */
 	msub_set_vsub(msub, NULL);
 
 	if (!msc_a) {
@@ -119,10 +115,11 @@ static void subscr_conn_toss(struct vlr_subscr *vsub)
 		return;
 	}
 
+	/* Already going away; do not term (that UAF's a conn in RELEASED). */
 	if (msc_a_in_release(msc_a))
-		osmo_fsm_inst_term(msc_a->c.fi, OSMO_FSM_TERM_ERROR, msc_a->c.fi);
-	else
-		msc_a_release_mo(msc_a, GSM_CAUSE_AUTH_FAILED);
+		return;
+
+	msc_a_release_mo(msc_a, GSM_CAUSE_AUTH_FAILED);
 }
 
 /* Allocate a new subscriber connection */

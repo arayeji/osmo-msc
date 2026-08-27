@@ -1116,6 +1116,8 @@ static int gsm411_mn_recv(struct gsm411_smc_inst *inst, int msg_type,
  * procedure at all, so a missing use count is normal there, not an error. */
 static void gsm411_put_cm_service_sms(struct gsm_trans *trans, struct msc_a *msc_a)
 {
+	if (!msc_a)
+		return;
 	if (osmo_use_count_by(&msc_a->use_count, MSC_A_USE_CM_SERVICE_SMS)) {
 		msc_a_put(msc_a, MSC_A_USE_CM_SERVICE_SMS);
 		return;
@@ -1199,6 +1201,8 @@ static struct gsm_trans *gsm411_alloc_mt_trans(struct gsm_network *net,
 
 	/* Attempt to find an existing connection */
 	msc_a = msc_a_for_vsub(vsub, true);
+	if (msc_a && msc_a_in_release(msc_a))
+		msc_a = NULL;
 
 	/* Allocate a new transaction */
 	trans = gsm411_trans_init(net, vsub, msc_a, tid, false);
