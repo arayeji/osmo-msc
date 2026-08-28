@@ -157,6 +157,10 @@ static void rtp_stream_fsm_establishing_established(struct osmo_fsm_inst *fi, ui
 	const struct mgcp_conn_peer *crcx_info;
 	switch (event) {
 	case RTP_STREAM_EV_CRCX_OK:
+		if (fi->proc.terminating || !rtps->ci) {
+			LOG_RTPS(rtps, LOGL_NOTICE, "Ignoring late CRCX OK on released RTP stream\n");
+			return;
+		}
 		crcx_info = osmo_mgcpc_ep_ci_get_rtp_info(rtps->ci);
 		if (!crcx_info) {
 			LOG_RTPS(rtps, LOGL_ERROR, "osmo_mgcpc_ep_ci_get_rtp_info() has "
@@ -166,15 +170,16 @@ static void rtp_stream_fsm_establishing_established(struct osmo_fsm_inst *fi, ui
 
 		osmo_sockaddr_str_from_str(&rtps->local, crcx_info->addr, crcx_info->port);
 		if (rtps->use_osmux != crcx_info->x_osmo_osmux_use) {
-			LOG_RTPS(rtps, LOGL_ERROR, "Osmux usage request and response don't match: %d vs %d",
+			LOG_RTPS(rtps, LOGL_ERROR, "Osmux usage request and response don't match: %d vs %d\n",
 				 rtps->use_osmux, crcx_info->x_osmo_osmux_use);
-			/* TODO: proper failure path */
-			OSMO_ASSERT(rtps->use_osmux != crcx_info->x_osmo_osmux_use);
+			rtp_stream_state_chg(rtps, RTP_STREAM_ST_DISCARDING);
+			return;
 		}
 		if (crcx_info->x_osmo_osmux_use)
 			rtps->local_osmux_cid = crcx_info->x_osmo_osmux_cid;
 		rtp_stream_update_id(rtps);
-		osmo_fsm_inst_dispatch(fi->proc.parent, rtps->event_avail, rtps);
+		if (fi->proc.parent && !fi->proc.terminating)
+			osmo_fsm_inst_dispatch(fi->proc.parent, rtps->event_avail, rtps);
 		check_established(rtps);
 
 		if ((!rtps->remote_sent_to_mgw || !rtps->codecs_sent_to_mgw || !rtps->mode_sent_to_mgw)
@@ -214,6 +219,8 @@ static void rtp_stream_fsm_establishing_established(struct osmo_fsm_inst *fi, ui
 void rtp_stream_fsm_established_onenter(struct osmo_fsm_inst *fi, uint32_t prev_state)
 {
 	struct rtp_stream *rtps = fi->priv;
+	if (!fi->proc.parent || fi->proc.terminating)
+		return;
 	osmo_fsm_inst_dispatch(fi->proc.parent, rtps->event_estab, rtps);
 }
 

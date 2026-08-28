@@ -672,7 +672,7 @@ int msc_a_ensure_cn_local_rtp(struct msc_a *msc_a, struct gsm_trans *cc_trans)
 	 * codec from the SDP is more politeness/avoiding confusion than necessity. The actual codec to be used would be
 	 * determined later. If no codec could be determined, pass none for the time being. */
 	return call_leg_ensure_ci(cl, RTP_TO_CN, cc_trans->call_id, cc_trans,
-				  rtp_to_ran->codecs_known ? &rtp_to_ran->codecs : NULL, NULL);
+				  (rtp_to_ran && rtp_to_ran->codecs_known) ? &rtp_to_ran->codecs : NULL, NULL);
 }
 
 static void assignment_request_timeout_cb(void *data);
@@ -770,6 +770,12 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 	default:
 		LOG_TRANS(cc_trans, LOGL_ERROR, "Assignment not possible for information transfer capability %d\n",
 			  cc_trans->bearer_cap.transfer);
+		msc_a_abort_assignment(msc_a, cc_trans);
+		return;
+	}
+
+	if (!msc_a->cc.call_leg || !msc_a->cc.call_leg->rtp[RTP_TO_RAN]) {
+		LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot send Assignment, no RAN RTP stream\n");
 		msc_a_abort_assignment(msc_a, cc_trans);
 		return;
 	}
@@ -1577,6 +1583,13 @@ static void msc_a_up_call_assignment_complete(struct msc_a *msc_a, const struct 
 	struct rtp_stream *rtps_to_ran = msc_a->cc.call_leg ? msc_a->cc.call_leg->rtp[RTP_TO_RAN] : NULL;
 	const struct gsm0808_speech_codec *codec_if_known = ac->assignment_complete.codec_present ?
 							    &ac->assignment_complete.codec : NULL;
+	bool assignment_pending = osmo_timer_pending(&msc_a->cc.assignment_request_pending);
+
+	if (msc_a_in_release(msc_a) || !assignment_pending) {
+		LOG_MSC_A(msc_a, LOGL_NOTICE,
+			  "Ignoring Assignment Complete, no assignment pending\n");
+		return;
+	}
 
 	/* Pending assignment has worked out. We're no longer waiting for a response now. */
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
@@ -1605,7 +1618,7 @@ static void msc_a_up_call_assignment_complete(struct msc_a *msc_a, const struct 
 	if (rtps_to_ran->use_osmux != ac->assignment_complete.osmux_present) {
 		LOG_MSC_A_CAT(msc_a, DCC, LOGL_ERROR, "Osmux usage ass request and complete don't match: %d vs %d\n",
 			 rtps_to_ran->use_osmux, ac->assignment_complete.osmux_present);
-		call_leg_release(msc_a->cc.call_leg);
+		msc_a_abort_assignment(msc_a, cc_trans);
 		return;
 	}
 
@@ -1621,7 +1634,7 @@ static void msc_a_up_call_assignment_complete(struct msc_a *msc_a, const struct 
 				break; /* we're good */
 			LOG_TRANS(cc_trans, LOGL_ERROR, "Unexpected codec in Assignment Complete for CSD: %s\n",
 				  gsm0808_speech_codec_type_name(codec_if_known->type));
-			call_leg_release(msc_a->cc.call_leg);
+			msc_a_abort_assignment(msc_a, cc_trans);
 			return;
 		default:
 			break;
@@ -1645,7 +1658,7 @@ static void msc_a_up_call_assignment_complete(struct msc_a *msc_a, const struct 
 		if (!codec_assigned) {
 			LOG_TRANS(cc_trans, LOGL_ERROR, "Unknown codec in Assignment Complete: %s\n",
 				  gsm0808_speech_codec_type_name(codec_if_known->type));
-			call_leg_release(msc_a->cc.call_leg);
+			msc_a_abort_assignment(msc_a, cc_trans);
 			return;
 		}
 
@@ -1679,7 +1692,7 @@ static void msc_a_up_call_assignment_complete(struct msc_a *msc_a, const struct 
 
 	if (cc_on_assignment_done(cc_trans)) {
 		/* If an error occurred, it was logged in cc_assignment_done() */
-		call_leg_release(msc_a->cc.call_leg);
+		msc_a_abort_assignment(msc_a, cc_trans);
 		return;
 	}
 }

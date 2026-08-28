@@ -519,6 +519,8 @@ void vlr_subscr_cancel_attach_fsm(struct vlr_subscr *vsub,
 		vlr_loc_update_cancel(vsub->lu_fsm, fsm_cause, gsm48_cause);
 	if (vsub->proc_arq_fsm)
 		vlr_parq_cancel(vsub->proc_arq_fsm, fsm_cause, gsm48_cause);
+	if (vsub->auth_fsm)
+		osmo_fsm_inst_term(vsub->auth_fsm, fsm_cause, NULL);
 	vlr_subscr_put(vsub, __func__);
 }
 

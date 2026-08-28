@@ -57,6 +57,7 @@
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/msc_roles.h>
 #include <osmocom/msc/call_leg.h>
+#include <osmocom/msc/paging.h>
 
 #include <assert.h>
 
@@ -124,6 +125,11 @@ static int gsm0408_loc_upd_acc(struct msc_a *msc_a, uint32_t send_tmsi)
 	uint8_t *l;
 	int rc;
 	struct osmo_mobile_identity mi = {};
+
+	if (!vsub) {
+		msgb_free(msg);
+		return -EINVAL;
+	}
 
 	gh = (struct gsm48_hdr *) msgb_put(msg, sizeof(*gh));
 	gh->proto_discr = GSM48_PDISC_MM;
@@ -1445,11 +1451,31 @@ extern int gsm0408_rcv_cc(struct msc_a *msc_a, struct msgb *msg);
  * VLR integration
  ***********************************************************************/
 
+/* Do not dereference a freed msc_a: only accept refs still on msub_list. */
+static struct msc_a *msc_a_from_conn_ref(void *msc_conn_ref)
+{
+	struct msub *msub;
+
+	if (!msc_conn_ref)
+		return NULL;
+	llist_for_each_entry(msub, &msub_list, entry) {
+		struct msc_a *msc_a = msub_msc_a(msub);
+		if (msc_a != msc_conn_ref)
+			continue;
+		if (msc_a_in_release(msc_a) || !msc_a->c.fi || msc_a->c.fi->proc.terminating)
+			return NULL;
+		return msc_a;
+	}
+	return NULL;
+}
+
 /* VLR asks us to send an authentication request */
 static int msc_vlr_tx_auth_req(void *msc_conn_ref, struct vlr_auth_tuple *at,
 			       bool send_autn)
 {
-	struct msc_a *msc_a = msc_conn_ref;
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
+		return -EINVAL;
 	return gsm48_tx_mm_auth_req(msc_a, at->vec.rand,
 				    send_autn? at->vec.autn : NULL,
 				    at->key_seq);
@@ -1458,14 +1484,18 @@ static int msc_vlr_tx_auth_req(void *msc_conn_ref, struct vlr_auth_tuple *at,
 /* VLR asks us to send an authentication reject */
 static int msc_vlr_tx_auth_rej(void *msc_conn_ref)
 {
-	struct msc_a *msc_a = msc_conn_ref;
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
+		return -EINVAL;
 	return gsm48_tx_mm_auth_rej(msc_a);
 }
 
 /* VLR asks us to transmit an Identity Request of given type */
 static int msc_vlr_tx_id_req(void *msc_conn_ref, uint8_t mi_type)
 {
-	struct msc_a *msc_a = msc_conn_ref;
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
+		return -EINVAL;
 
 	/* Store requested MI type, so we can check the response */
 	msc_a->mm_id_req_type = mi_type;
@@ -1476,15 +1506,17 @@ static int msc_vlr_tx_id_req(void *msc_conn_ref, uint8_t mi_type)
 /* VLR asks us to transmit a Location Update Accept */
 static int msc_vlr_tx_lu_acc(void *msc_conn_ref, uint32_t send_tmsi, enum vlr_lu_type lu_type)
 {
-	struct msc_a *msc_a = msc_conn_ref;
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
+		return -EINVAL;
 	return gsm0408_loc_upd_acc(msc_a, send_tmsi);
 }
 
 /* VLR asks us to transmit a Location Update Reject */
 static int msc_vlr_tx_lu_rej(void *msc_conn_ref, enum gsm48_reject_value cause, enum vlr_lu_type lu_type)
 {
-	struct msc_a *msc_a = msc_conn_ref;
-	if (!msc_a || msc_a_in_release(msc_a))
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
 		return -EINVAL;
 	return gsm0408_loc_upd_rej(msc_a, cause);
 }
@@ -1492,14 +1524,21 @@ static int msc_vlr_tx_lu_rej(void *msc_conn_ref, enum gsm48_reject_value cause, 
 /* VLR asks us to transmit a CM Service Accept */
 int msc_vlr_tx_cm_serv_acc(void *msc_conn_ref, enum osmo_cm_service_type cm_service_type)
 {
-	struct msc_a *msc_a = msc_conn_ref;
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
+		return -EINVAL;
 	return msc_gsm48_tx_mm_serv_ack(msc_a);
 }
 
 static int msc_vlr_tx_common_id(void *msc_conn_ref)
 {
-	struct msc_a *msc_a = msc_conn_ref;
-	struct vlr_subscr *vsub = msc_a_vsub(msc_a);
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	struct vlr_subscr *vsub;
+	if (!msc_a)
+		return -EINVAL;
+	vsub = msc_a_vsub(msc_a);
+	if (!vsub)
+		return -EINVAL;
 	struct ran_msg msg = {
 		.msg_type = RAN_MSG_COMMON_ID,
 		.common_id = {
@@ -1518,8 +1557,11 @@ static int msc_vlr_tx_common_id(void *msc_conn_ref)
 /* VLR asks us to transmit MM info. */
 static int msc_vlr_tx_mm_info(void *msc_conn_ref)
 {
-	struct msc_a *msc_a = msc_conn_ref;
-	struct gsm_network *net = msc_a_net(msc_a);
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	struct gsm_network *net;
+	if (!msc_a)
+		return -EINVAL;
+	net = msc_a_net(msc_a);
 	if (!net->send_mm_info)
 		return 0;
 	return gsm48_tx_mm_info(msc_a);
@@ -1530,7 +1572,9 @@ static int msc_vlr_tx_mm_info(void *msc_conn_ref)
 static int msc_vlr_tx_cm_serv_rej(void *msc_conn_ref, enum osmo_cm_service_type cm_service_type,
 				  enum gsm48_reject_value cause)
 {
-	struct msc_a *msc_a = msc_conn_ref;
+	struct msc_a *msc_a = msc_a_from_conn_ref(msc_conn_ref);
+	if (!msc_a)
+		return -EINVAL;
 	msc_gsm48_tx_mm_serv_rej(msc_a, cause);
 	msc_a_put(msc_a, msc_a_cm_service_type_to_use(msc_a, cm_service_type));
 	return 0;
@@ -1599,6 +1643,7 @@ static void msc_vlr_subscr_inval(void *msc_conn_ref, struct vlr_subscr *vsub, en
 	}
 	/* Paging/CC trans keep a use on the discarded vsub and later
 	 * SEGVd when the zombie was walked. Free them with the entry. */
+	paging_expired(vsub);
 	trans_free_for_vsub(vsub);
 }
 

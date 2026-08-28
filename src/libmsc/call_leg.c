@@ -265,6 +265,9 @@ static void call_leg_fsm_releasing(struct osmo_fsm_inst *fi, uint32_t event, voi
 	switch (event) {
 
 	case CALL_LEG_EV_RTP_STREAM_GONE:
+	case CALL_LEG_EV_RTP_STREAM_ADDR_AVAILABLE:
+	case CALL_LEG_EV_RTP_STREAM_ESTABLISHED:
+		/* Late MGCP CRCX/MDCX after we started DLCX. */
 		break;
 
 	case CALL_LEG_EV_MGW_ENDPOINT_GONE:
@@ -320,6 +323,8 @@ static const struct osmo_fsm_state call_leg_fsm_states[] = {
 	[CALL_LEG_ST_RELEASING] = {
 		.name = "RELEASING",
 		.in_event_mask = 0
+			| S(CALL_LEG_EV_RTP_STREAM_ADDR_AVAILABLE)
+			| S(CALL_LEG_EV_RTP_STREAM_ESTABLISHED)
 			| S(CALL_LEG_EV_RTP_STREAM_GONE)
 			| S(CALL_LEG_EV_MGW_ENDPOINT_GONE)
 			,
