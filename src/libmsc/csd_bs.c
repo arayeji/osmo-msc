@@ -22,8 +22,38 @@
  */
 #include <errno.h>
 
+#include <osmocom/core/utils.h>
 #include <osmocom/msc/csd_bs.h>
 #include <osmocom/msc/debug.h>
+
+static bool csd_bs_valid(enum csd_bs bs)
+{
+	return bs > CSD_BS_NONE && bs < CSD_BS_MAX;
+}
+
+/* Walk at most ARRAY_SIZE(list->bs). A freed/overwritten trans leaves count
+ * in the hundreds of thousands; the unclamped loop wrote off the object
+ * (SEGV at csd_bs_list_add_bs, fault address 0x100108). */
+static unsigned int csd_bs_list_n(const struct csd_bs_list *list)
+{
+	if (!list)
+		return 0;
+	if (list->count > ARRAY_SIZE(list->bs))
+		return ARRAY_SIZE(list->bs);
+	return list->count;
+}
+
+static unsigned int csd_bs_list_clamp(struct csd_bs_list *list)
+{
+	unsigned int n = csd_bs_list_n(list);
+
+	if (list && list->count != n) {
+		LOGP(DMSC, LOGL_ERROR, "csd_bs_list count %u exceeds max %zu, clamping\n",
+		     list->count, ARRAY_SIZE(list->bs));
+		list->count = n;
+	}
+	return n;
+}
 
 /* csd_bs related below */
 
@@ -150,6 +180,8 @@ osmo_static_assert(ARRAY_SIZE(bs_map) == CSD_BS_MAX, _invalid_size_bs_map);
 
 bool csd_bs_is_transp(enum csd_bs bs)
 {
+	if (!csd_bs_valid(bs))
+		return false;
 	return bs_map[bs].transp;
 }
 
@@ -158,7 +190,14 @@ bool csd_bs_is_transp(enum csd_bs bs)
 int csd_bs_to_str_buf(char *buf, size_t buflen, enum csd_bs bs)
 {
 	struct osmo_strbuf sb = { .buf = buf, .len = buflen };
-	const struct csd_bs_map *map = &bs_map[bs];
+	const struct csd_bs_map *map;
+
+	if (!csd_bs_valid(bs)) {
+		OSMO_STRBUF_PRINTF(sb, "BS?");
+		return sb.chars_needed;
+	}
+
+	map = &bs_map[bs];
 
 	OSMO_STRBUF_PRINTF(sb, "BS%u%s",
 			   map->num,
@@ -182,6 +221,8 @@ const char *csd_bs_to_str(enum csd_bs bs)
 
 static int csd_bs_to_gsm0808_data_rate_transp(enum csd_bs bs, uint8_t *ch_rate_type)
 {
+	if (!csd_bs_valid(bs))
+		return -EINVAL;
 	switch (bs_map[bs].rate) {
 	case 300:
 		*ch_rate_type = GSM0808_DATA_FULL_PREF;
@@ -204,7 +245,11 @@ static int csd_bs_to_gsm0808_data_rate_transp(enum csd_bs bs, uint8_t *ch_rate_t
 
 static int csd_bs_to_gsm0808_data_rate_non_transp(enum csd_bs bs, uint8_t *ch_rate_type)
 {
-	uint16_t rate = bs_map[bs].rate;
+	uint16_t rate;
+
+	if (!csd_bs_valid(bs))
+		return -EINVAL;
+	rate = bs_map[bs].rate;
 
 	if (rate < 6000) {
 		*ch_rate_type = GSM0808_DATA_FULL_PREF;
@@ -220,7 +265,11 @@ static int csd_bs_to_gsm0808_data_rate_non_transp(enum csd_bs bs, uint8_t *ch_ra
 
 static int csd_bs_to_gsm0808_data_rate_non_transp_allowed(enum csd_bs bs)
 {
-	uint16_t rate = bs_map[bs].rate;
+	uint16_t rate;
+
+	if (!csd_bs_valid(bs))
+		return -EINVAL;
+	rate = bs_map[bs].rate;
 
 	if (rate < 6000)
 		return GSM0808_DATA_RATE_NON_TRANSP_ALLOWED_6k0;
@@ -232,9 +281,16 @@ static int csd_bs_to_gsm0808_data_rate_non_transp_allowed(enum csd_bs bs)
 
 enum csd_bs csd_bs_from_bearer_cap(const struct gsm_mncc_bearer_cap *cap, bool transp)
 {
-	enum gsm48_bcap_ra ra = cap->data.rate_adaption;
-	enum gsm48_bcap_user_rate rate = cap->data.user_rate;
-	bool async = cap->data.async;
+	enum gsm48_bcap_ra ra;
+	enum gsm48_bcap_user_rate rate;
+	bool async;
+
+	if (!cap)
+		return CSD_BS_NONE;
+
+	ra = cap->data.rate_adaption;
+	rate = cap->data.user_rate;
+	async = cap->data.async;
 
 	/* 3.1kHz CSD calls won't have the rate adaptation field set
 	   but do require rate adaptation. */
@@ -298,12 +354,12 @@ enum csd_bs csd_bs_from_bearer_cap(const struct gsm_mncc_bearer_cap *cap, bool t
 int csd_bs_list_to_str_buf(char *buf, size_t buflen, const struct csd_bs_list *list)
 {
 	struct osmo_strbuf sb = { .buf = buf, .len = buflen };
-	int i;
+	unsigned int i, n = csd_bs_list_n(list);
 
-	if (!list->count)
+	if (!n)
 		OSMO_STRBUF_PRINTF(sb, "(no-bearer-services)");
 
-	for (i = 0; i < list->count; i++) {
+	for (i = 0; i < n; i++) {
 		if (i)
 			OSMO_STRBUF_PRINTF(sb, ",");
 
@@ -324,9 +380,9 @@ const char *csd_bs_list_to_str(const struct csd_bs_list *list)
 
 bool csd_bs_list_has_bs(const struct csd_bs_list *list, enum csd_bs bs)
 {
-	int i;
+	unsigned int i, n = csd_bs_list_n(list);
 
-	for (i = 0; i < list->count; i++) {
+	for (i = 0; i < n; i++) {
 		if (list->bs[i] == bs)
 			return true;
 	}
@@ -336,58 +392,77 @@ bool csd_bs_list_has_bs(const struct csd_bs_list *list, enum csd_bs bs)
 
 void csd_bs_list_add_bs(struct csd_bs_list *list, enum csd_bs bs)
 {
-	int i;
+	unsigned int i, n;
 
-	if (!bs)
+	if (!list || !csd_bs_valid(bs))
 		return;
 
-	for (i = 0; i < list->count; i++) {
+	n = csd_bs_list_clamp(list);
+	for (i = 0; i < n; i++) {
 		if (list->bs[i] == bs)
 			return;
 	}
 
-	list->bs[i] = bs;
-	list->count++;
+	if (n >= ARRAY_SIZE(list->bs)) {
+		LOGP(DMSC, LOGL_ERROR, "csd_bs_list full, dropping %s\n", csd_bs_to_str(bs));
+		return;
+	}
+
+	list->bs[n] = bs;
+	list->count = n + 1;
 }
 
 void csd_bs_list_remove(struct csd_bs_list *list, enum csd_bs bs)
 {
-	int i;
+	unsigned int i, n;
 	bool found = false;
 
-	for (i = 0; i < list->count; i++) {
+	if (!list)
+		return;
+
+	n = csd_bs_list_clamp(list);
+	for (i = 0; i < n; i++) {
 		if (list->bs[i] == bs)
 			found = true;
-		if (found && i + 1 < list->count)
+		if (found && i + 1 < n)
 			list->bs[i] = list->bs[i + 1];
 	}
 
 	if (found)
-		list->count--;
+		list->count = n - 1;
 }
 
 void csd_bs_list_intersection(struct csd_bs_list *dest, const struct csd_bs_list *other)
 {
-	int i;
+	unsigned int i;
 
-	for (i = 0; i < dest->count; i++) {
-		if (csd_bs_list_has_bs(other, dest->bs[i]))
+	if (!dest || !other)
+		return;
+
+	csd_bs_list_clamp(dest);
+	for (i = 0; i < dest->count; ) {
+		if (csd_bs_list_has_bs(other, dest->bs[i])) {
+			i++;
 			continue;
+		}
 		csd_bs_list_remove(dest, dest->bs[i]);
-		i--;
 	}
 }
 
 int csd_bs_list_to_gsm0808_channel_type(struct gsm0808_channel_type *ct, const struct csd_bs_list *list)
 {
-	int i;
+	unsigned int i, n;
 	int rc;
+
+	if (!ct || !list)
+		return -EINVAL;
 
 	*ct = (struct gsm0808_channel_type){
 		.ch_indctr = GSM0808_CHAN_DATA,
 	};
 
-	if (!list->count)
+	n = csd_bs_list_n(list);
+	if (!n)
 		return -EINVAL;
 
 	if (csd_bs_is_transp(list->bs[0])) {
@@ -403,8 +478,8 @@ int csd_bs_list_to_gsm0808_channel_type(struct gsm0808_channel_type *ct, const s
 	ct->data_rate = rc;
 
 	/* Other possible data rates allowed (3GPP TS 48.008 § 3.2.2.11, 5a) */
-	if (!ct->data_transparent && list->count > 1) {
-		for (i = 1; i < list->count; i++) {
+	if (!ct->data_transparent && n > 1) {
+		for (i = 1; i < n; i++) {
 			if (!csd_bs_is_transp(list->bs[i]))
 				continue;
 
@@ -426,8 +501,17 @@ int csd_bs_list_to_gsm0808_channel_type(struct gsm0808_channel_type *ct, const s
 
 int csd_bs_list_to_bearer_cap(struct gsm_mncc_bearer_cap *cap, const struct csd_bs_list *list)
 {
-	for (unsigned int i = 0; i < list->count; i++) {
+	unsigned int i, n;
+
+	if (!cap || !list)
+		return 0;
+
+	n = csd_bs_list_n(list);
+	for (i = 0; i < n; i++) {
 		const enum csd_bs bs = list->bs[i];
+
+		if (!csd_bs_valid(bs))
+			continue;
 
 		if (cap->transfer == GSM48_BCAP_ITCAP_UNR_DIG_INF)
 			cap->data.rate_adaption = GSM48_BCAP_RA_V110_X30;
@@ -483,6 +567,9 @@ int csd_bs_list_to_bearer_cap(struct gsm_mncc_bearer_cap *cap, const struct csd_
 
 void csd_bs_list_from_bearer_cap(struct csd_bs_list *list, const struct gsm_mncc_bearer_cap *cap)
 {
+	if (!list || !cap)
+		return;
+
 	*list = (struct csd_bs_list){};
 
 	switch (cap->data.transp) {

@@ -28,18 +28,24 @@
 
 void trans_cc_filter_init(struct gsm_trans *trans)
 {
+	if (!trans || trans->freeing)
+		return;
 	trans->cc.codecs = (struct codec_filter){};
 	trans->cc.csd = (struct csd_filter){};
 }
 
 void trans_cc_filter_set_ran(struct gsm_trans *trans, enum osmo_rat_type ran_type)
 {
+	if (!trans || trans->freeing)
+		return;
 	codec_filter_set_ran(&trans->cc.codecs, ran_type);
 	csd_filter_set_ran(&trans->cc.csd, ran_type);
 }
 
 void trans_cc_filter_set_bss(struct gsm_trans *trans, struct msc_a *msc_a)
 {
+	if (!trans || trans->freeing || !msc_a)
+		return;
 	codec_filter_set_bss(&trans->cc.codecs, &msc_a->cc.compl_l3_codec_list_bss_supported);
 
 	/* For CSD, there is no list of supported bearer services passed in
@@ -48,6 +54,9 @@ void trans_cc_filter_set_bss(struct gsm_trans *trans, struct msc_a *msc_a)
 
 void _trans_cc_filter_run(const char *file, int line, struct gsm_trans *trans)
 {
+	if (!trans || trans->freeing)
+		return;
+
 	switch (trans->bearer_cap.transfer) {
 	case GSM48_BCAP_ITCAP_SPEECH:
 		codec_filter_run(&trans->cc.codecs, &trans->cc.local, &trans->cc.remote);
@@ -71,6 +80,9 @@ void _trans_cc_filter_run(const char *file, int line, struct gsm_trans *trans)
 
 void trans_cc_filter_set_ms_from_bc(struct gsm_trans *trans, const struct gsm_mncc_bearer_cap *bcap)
 {
+	if (!trans || trans->freeing)
+		return;
+
 	trans->cc.codecs.ms = (struct sdp_audio_codecs){0};
 	trans->cc.csd.ms = (struct csd_bs_list){0};
 
@@ -96,6 +108,9 @@ void trans_cc_filter_set_ms_from_bc(struct gsm_trans *trans, const struct gsm_mn
 
 void trans_cc_set_remote_from_bc(struct gsm_trans *trans, const struct gsm_mncc_bearer_cap *bcap)
 {
+	if (!trans || trans->freeing)
+		return;
+
 	trans->cc.remote.audio_codecs = (struct sdp_audio_codecs){0};
 	trans->cc.remote.bearer_services = (struct csd_bs_list){0};
 

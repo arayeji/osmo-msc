@@ -37,8 +37,21 @@ void test_csd_bs_list_remove(void)
 	printf("  %s\n", csd_bs_list_to_str(&list));
 }
 
+void test_csd_bs_list_overflow(void)
+{
+	struct csd_bs_list list = { .count = 0x40041 };
+
+	printf("=== %s ===\n", __func__);
+	csd_bs_list_add_bs(NULL, CSD_BS_21_T_V110_0k3);
+	csd_bs_list_add_bs(&list, CSD_BS_NONE);
+	csd_bs_list_add_bs(&list, CSD_BS_21_T_V110_0k3);
+	printf("  count after corrupt add: %u\n", list.count);
+	printf("  %s\n", csd_bs_list_to_str(&list));
+}
+
 int main(void)
 {
 	test_csd_bs_list_remove();
+	test_csd_bs_list_overflow();
 	return 0;
 }

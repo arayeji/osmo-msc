@@ -9,3 +9,6 @@ removing BS24T:
   BS21T
 removing BS21T:
   (no-bearer-services)
+=== test_csd_bs_list_overflow ===
+  count after corrupt add: 15
+  BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?,BS?
