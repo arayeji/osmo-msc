@@ -355,12 +355,12 @@ struct vlr_subscr *_vlr_subscr_find_by_msisdn(struct vlr_instance *vlr,
 					      const char *use,
 					      const char *file, int line)
 {
-	struct vlr_subscr *vsub;
+	struct vlr_subscr *vsub, *vsub_tmp;
 
 	if (!msisdn || !*msisdn)
 		return NULL;
 
-	llist_for_each_entry(vsub, &vlr->subscribers, list) {
+	llist_for_each_entry_safe(vsub, vsub_tmp, &vlr->subscribers, list) {
 		if (!vsub->imsi[0])
 			continue;
 		if (vlr_subscr_matches_msisdn(vsub, msisdn)) {

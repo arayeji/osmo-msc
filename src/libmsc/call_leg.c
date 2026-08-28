@@ -111,12 +111,40 @@ static int call_leg_fsm_timer_cb(struct osmo_fsm_inst *fi)
 	return 0;
 }
 
+static void call_leg_detach_trans(struct call_leg *cl)
+{
+	int i;
+
+	if (!cl)
+		return;
+	for (i = 0; i < ARRAY_SIZE(cl->rtp); i++) {
+		if (cl->rtp[i])
+			cl->rtp[i]->for_trans = NULL;
+	}
+}
+
+static void call_leg_dispatch_parent(struct call_leg *cl, uint32_t event, void *data)
+{
+	struct osmo_fsm_inst *parent;
+
+	if (!cl || cl->deallocating || !cl->fi)
+		return;
+	parent = cl->fi->proc.parent;
+	if (!parent)
+		return;
+	osmo_fsm_inst_dispatch(parent, event, data);
+}
+
 void call_leg_release(struct call_leg *cl)
 {
 	if (!cl)
 		return;
-	if (cl->fi->state == CALL_LEG_ST_RELEASING)
+	if (cl->deallocating || cl->fi->state == CALL_LEG_ST_RELEASING)
 		return;
+	/* Drop CC backpointers before tearing MGCP children: SGs toss and
+	 * assignment abort free the trans while CRCX/MDCX is still pending. */
+	cl->deallocating = true;
+	call_leg_detach_trans(cl);
 	call_leg_state_chg(cl, CALL_LEG_ST_RELEASING);
 }
 
@@ -156,7 +184,7 @@ static void call_leg_fsm_establishing_established(struct osmo_fsm_inst *fi, uint
 				break;
 			}
 		}
-		if (!established)
+		if (!established || cl->deallocating)
 			break;
 		if (cl->fi->state != CALL_LEG_ST_ESTABLISHED)
 			call_leg_state_chg(cl, CALL_LEG_ST_ESTABLISHED);
@@ -164,7 +192,7 @@ static void call_leg_fsm_establishing_established(struct osmo_fsm_inst *fi, uint
 
 	case CALL_LEG_EV_RTP_STREAM_ADDR_AVAILABLE:
 		rtps = data;
-		osmo_fsm_inst_dispatch(fi->proc.parent, cl->parent_event_rtp_addr_available, rtps);
+		call_leg_dispatch_parent(cl, cl->parent_event_rtp_addr_available, rtps);
 		break;
 
 	case CALL_LEG_EV_RTP_STREAM_GONE:
@@ -184,7 +212,7 @@ static void call_leg_fsm_establishing_established(struct osmo_fsm_inst *fi, uint
 void call_leg_fsm_established_onenter(struct osmo_fsm_inst *fi, uint32_t prev_state)
 {
 	struct call_leg *cl = fi->priv;
-	osmo_fsm_inst_dispatch(fi->proc.parent, cl->parent_event_rtp_complete, cl);
+	call_leg_dispatch_parent(cl, cl->parent_event_rtp_complete, cl);
 }
 
 void call_leg_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_state)

@@ -2152,6 +2152,11 @@ static int tch_rtp_create(struct gsm_network *net, const struct gsm_mncc_rtp *rt
 
 int cc_on_cn_local_rtp_port_known(struct gsm_trans *cc_trans)
 {
+	/* Assignment abort / SGs toss clear for_trans before trans_free.
+	 * MGCP CRCX/MDCX OK can still arrive afterwards. */
+	if (!cc_trans)
+		return -EINVAL;
+
 	/* Depending on MO or MT call, dispatch the event differently */
 	switch (cc_trans->cc.state) {
 	case GSM_CSTATE_INITIATED:

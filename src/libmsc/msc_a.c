@@ -744,7 +744,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 		if (sdp_audio_codecs_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.audio_codecs)) {
 			LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot compose Channel Type (Permitted Speech) from codecs: %s\n",
 				  codec_filter_to_str(&cc_trans->cc.codecs, &cc_trans->cc.local, &cc_trans->cc.remote));
-			trans_free(cc_trans);
+			msc_a_abort_assignment(msc_a, cc_trans);
 			return;
 		}
 		break;
@@ -763,6 +763,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 		if (csd_bs_list_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.bearer_services)) {
 			LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot compose channel type from: %s\n",
 				  csd_filter_to_str(&cc_trans->cc.csd, &cc_trans->cc.local, &cc_trans->cc.remote));
+			msc_a_abort_assignment(msc_a, cc_trans);
 			return;
 		}
 		break;
@@ -789,7 +790,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 	};
 	if (msc_a_ran_down(msc_a, MSC_ROLE_I, &msg)) {
 		LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot send Assignment\n");
-		trans_free(cc_trans);
+		msc_a_abort_assignment(msc_a, cc_trans);
 		return;
 	}
 }
@@ -887,6 +888,11 @@ static void msc_a_fsm_communicating(struct osmo_fsm_inst *fi, uint32_t event, vo
 			msc_a_tx_assignment_cmd(msc_a);
 			return;
 		case RTP_TO_CN:
+			if (!rtps->for_trans) {
+				LOG_MSC_A(msc_a, LOGL_NOTICE,
+					  "CN RTP address available after call transaction gone\n");
+				return;
+			}
 			cc_on_cn_local_rtp_port_known(rtps->for_trans);
 			return;
 		default:
@@ -988,10 +994,12 @@ static void msc_a_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_
 	/* We no longer care about assignment responses. */
 	osmo_timer_del(&msc_a->cc.assignment_request_pending);
 
+	/* Detach RTP before freeing transactions: SGs toss used to
+	 * trans_conn_closed() first and leave for_trans dangling. */
+	call_leg_release(msc_a->cc.call_leg);
+
 	/* If we're closing in a middle of a trans, we need to clean up */
 	trans_conn_closed(msc_a);
-
-	call_leg_release(msc_a->cc.call_leg);
 
 	/* Cancel use counts for pending CM Service / Paging */
 	for (i = 0; i < ARRAY_SIZE(use_counts_to_cancel); i++) {
