@@ -391,6 +391,33 @@ void trans_conn_closed(struct msc_a *msc_a)
 	msc_a_put(msc_a, __func__);
 }
 
+/* Free leftover CC/SMS/SS trans on a VLR entry being discarded (dedup).
+ * Paging trans have msc_a == NULL so trans_conn_closed never sees them. */
+void trans_free_for_vsub(struct vlr_subscr *vsub)
+{
+	struct gsm_network *net;
+	struct gsm_trans *trans, *found;
+
+	if (!vsub || !vsub->vlr)
+		return;
+	net = vsub->vlr->user_ctx;
+	if (!net)
+		return;
+
+	while (1) {
+		found = NULL;
+		llist_for_each_entry(trans, &net->trans_list, entry) {
+			if (trans->vsub == vsub) {
+				found = trans;
+				break;
+			}
+		}
+		if (!found)
+			return;
+		trans_free(found);
+	}
+}
+
 const struct value_string trans_type_names[] = {
 	{ TRANS_GCC, "GCC" },
 	{ TRANS_BCC, "BCC" },

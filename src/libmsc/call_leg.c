@@ -104,9 +104,24 @@ void call_leg_reparent(struct call_leg *cl,
 	cl->parent_event_rtp_complete = parent_event_rtp_complete;
 }
 
+static void call_leg_try_finish(struct call_leg *cl)
+{
+	if (!cl || !cl->fi)
+		return;
+	if (cl->mgw_endpoint)
+		return;
+	osmo_fsm_inst_term(cl->fi, OSMO_FSM_TERM_REGULAR, NULL);
+}
+
 static int call_leg_fsm_timer_cb(struct osmo_fsm_inst *fi)
 {
 	struct call_leg *cl = fi->priv;
+
+	/* RELEASING waits for MGCP DLCX. If the MGW never answers, give up. */
+	if (fi->state == CALL_LEG_ST_RELEASING) {
+		osmo_fsm_inst_term(fi, OSMO_FSM_TERM_TIMEOUT, NULL);
+		return 0;
+	}
 	call_leg_release(cl);
 	return 0;
 }
@@ -137,6 +152,8 @@ static void call_leg_dispatch_parent(struct call_leg *cl, uint32_t event, void *
 
 void call_leg_release(struct call_leg *cl)
 {
+	struct osmo_fsm_inst *parent;
+
 	if (!cl)
 		return;
 	if (cl->deallocating || cl->fi->state == CALL_LEG_ST_RELEASING)
@@ -145,6 +162,15 @@ void call_leg_release(struct call_leg *cl)
 	 * assignment abort free the trans while CRCX/MDCX is still pending. */
 	cl->deallocating = true;
 	call_leg_detach_trans(cl);
+
+	/* Tell the parent to forget us, then unlink so msc_a teardown cannot
+	 * talloc-free this FSM under a pending MGCP CRCX/MDCX/DLCX. */
+	parent = cl->fi->proc.parent;
+	if (parent && !parent->proc.terminating)
+		osmo_fsm_inst_dispatch(parent, cl->fi->proc.parent_term_event, cl);
+	if (cl->fi->proc.parent)
+		osmo_fsm_inst_unlink_parent(cl->fi, gsmnet);
+
 	call_leg_state_chg(cl, CALL_LEG_ST_RELEASING);
 }
 
@@ -217,13 +243,19 @@ void call_leg_fsm_established_onenter(struct osmo_fsm_inst *fi, uint32_t prev_st
 
 void call_leg_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_state)
 {
-	/* Trigger termination of children FSMs (rtp_stream(s)) before
-	 * terminating ourselves, otherwise we are not able to receive
-	 * CALL_LEG_EV_MGW_ENDPOINT_GONE from cl->mgw_endpoint (call_leg =>
-	 * rtp_stream => mgw_endpoint), because osmo_fsm disabled dispatching
-	 * events to an FSM in process of terminating. */
-	osmo_fsm_inst_term_children(fi, OSMO_FSM_TERM_PARENT, NULL);
-	osmo_fsm_inst_term(fi, OSMO_FSM_TERM_REGULAR, NULL);
+	struct call_leg *cl = fi->priv;
+	int i;
+
+	/* Release RTP streams (they cancel MGCP notify + DLCX). Do not
+	 * osmo_fsm_inst_term ourselves or the MGW endpoint here: a pending
+	 * CRCX/MDCX reply used to land on the freed FSM (SEGV ~1s later). */
+	for (i = 0; i < ARRAY_SIZE(cl->rtp); i++) {
+		if (!cl->rtp[i])
+			continue;
+		rtp_stream_release(cl->rtp[i]);
+		cl->rtp[i] = NULL;
+	}
+	call_leg_try_finish(cl);
 }
 
 static void call_leg_fsm_releasing(struct osmo_fsm_inst *fi, uint32_t event, void *data)
@@ -233,11 +265,11 @@ static void call_leg_fsm_releasing(struct osmo_fsm_inst *fi, uint32_t event, voi
 	switch (event) {
 
 	case CALL_LEG_EV_RTP_STREAM_GONE:
-		/* We're already terminating, child RTP streams will also terminate, there is nothing left to do. */
 		break;
 
 	case CALL_LEG_EV_MGW_ENDPOINT_GONE:
 		call_leg_mgw_endpoint_gone(cl);
+		call_leg_try_finish(cl);
 		break;
 
 	default:

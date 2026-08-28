@@ -915,13 +915,15 @@ static void msc_a_fsm_communicating(struct osmo_fsm_inst *fi, uint32_t event, vo
 		if (msc_a->cc.active_trans)
 			trans_free(msc_a->cc.active_trans);
 
-		/* If there is another call still waiting to be activated, this is the time when the mgcp_ctx is
-		 * available again and the other call can start assigning. */
-		waiting_trans = find_waiting_call(msc_a);
-		if (waiting_trans) {
-			LOG_MSC_A(msc_a, LOGL_DEBUG, "(ti %02x) Call waiting: starting Assignment\n",
-				  waiting_trans->transaction_id);
-			msc_a_try_call_assignment(waiting_trans);
+		/* Do not start another assignment on a conn that is
+		 * already going away (SGs toss / assignment abort). */
+		if (!msc_a_in_release(msc_a)) {
+			waiting_trans = find_waiting_call(msc_a);
+			if (waiting_trans) {
+				LOG_MSC_A(msc_a, LOGL_DEBUG, "(ti %02x) Call waiting: starting Assignment\n",
+					  waiting_trans->transaction_id);
+				msc_a_try_call_assignment(waiting_trans);
+			}
 		}
 		msc_a_put(msc_a, __func__);
 		return;

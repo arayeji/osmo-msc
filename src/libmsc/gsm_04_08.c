@@ -1597,6 +1597,9 @@ static void msc_vlr_subscr_inval(void *msc_conn_ref, struct vlr_subscr *vsub, en
 			msc_a_release_cn(msc_a);
 		msc_a_put(msc_a, __func__);
 	}
+	/* Paging/CC trans keep a use on the discarded vsub and later
+	 * SEGVd when the zombie was walked. Free them with the entry. */
+	trans_free_for_vsub(vsub);
 }
 
 /* operations that we need to implement for libvlr */
