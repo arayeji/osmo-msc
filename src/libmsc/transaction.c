@@ -212,6 +212,7 @@ struct gsm_trans *trans_alloc(struct gsm_network *net,
 		return NULL;
 
 	*trans = (struct gsm_trans){
+		.magic = GSM_TRANS_MAGIC,
 		.vsub = vsub,
 		.type = type,
 		.log_subsys = subsys,
@@ -232,6 +233,20 @@ struct gsm_trans *trans_alloc(struct gsm_network *net,
 	return trans;
 }
 
+bool trans_is_live(const struct gsm_trans *trans)
+{
+	const struct gsm_trans *t;
+
+	if (!trans || trans->magic != GSM_TRANS_MAGIC || trans->freeing || !trans->net)
+		return false;
+
+	llist_for_each_entry(t, &trans->net->trans_list, entry) {
+		if (t == trans)
+			return true;
+	}
+	return false;
+}
+
 /*! Release a transaction
  * \param[in] trans Transaction to be released
  */
@@ -244,6 +259,10 @@ void trans_free(struct gsm_trans *trans)
 
 	if (!trans)
 		return;
+	if (trans->magic != GSM_TRANS_MAGIC) {
+		LOGP(DMSC, LOGL_ERROR, "trans_free: invalid magic 0x%x\n", trans->magic);
+		return;
+	}
 	if (trans->freeing)
 		return;
 	trans->freeing = true;
@@ -307,6 +326,7 @@ void trans_free(struct gsm_trans *trans)
 	msc_a = trans->msc_a;
 	trans->msc_a = NULL;
 
+	trans->magic = 0;
 	talloc_free(trans);
 
 	if (msc_a && usage_token)

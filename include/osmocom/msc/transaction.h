@@ -17,6 +17,7 @@ struct vty;
 
 /* Used for late TID assignment */
 #define TRANS_ID_UNASSIGNED 0xff
+#define GSM_TRANS_MAGIC 0x54524e53u
 
 #define LOG_TRANS_CAT_SRC(trans, subsys, level, file, line, fmt, args...) \
 	LOGPSRC(subsys, level, file, line, \
@@ -59,6 +60,8 @@ uint8_t trans_type_to_gsm48_proto(enum trans_type type);
 
 /* One transaction */
 struct gsm_trans {
+	uint32_t magic;
+
 	/* Entry in list of all transactions */
 	struct llist_head entry;
 
@@ -197,6 +200,7 @@ struct gsm_trans *trans_alloc(struct gsm_network *net,
 			      enum trans_type type, uint8_t trans_id,
 			      uint32_t callref);
 void trans_free(struct gsm_trans *trans);
+bool trans_is_live(const struct gsm_trans *trans);
 
 int trans_assign_trans_id(const struct gsm_network *net, const struct vlr_subscr *vsub,
 			  enum trans_type type);

@@ -37,6 +37,7 @@
 #include <osmocom/vlr/vlr.h>
 #include <osmocom/msc/transaction.h>
 #include <osmocom/msc/transaction_cc.h>
+#include <osmocom/msc/csd_bs.h>
 #include <osmocom/msc/ran_conn.h>
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/msc/ran_msg_a.h>
@@ -708,6 +709,11 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 	struct gsm0808_channel_type channel_type;
 	struct gsm_network *net = msc_a_net(msc_a);
 
+	if (msc_a_in_release(msc_a)) {
+		LOG_MSC_A(msc_a, LOGL_NOTICE, "Not transmitting Assignment, conn is in release\n");
+		return;
+	}
+
 	/* Do not dispatch another Assignment Command before an earlier assignment is completed. This is a sanity
 	 * safeguard, ideally callers should not even invoke this function when an Assignment is already ongoing.
 	 * (There is no osmo_fsm for Assignment / the CC trans code; when we refactor that one day, this timer should be
@@ -717,17 +723,25 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 			  "Not transmitting Assignment, still waiting for the response to an earlier Assignment\n");
 		return;
 	}
-	osmo_timer_setup(&msc_a->cc.assignment_request_pending, assignment_request_timeout_cb, msc_a);
-	osmo_timer_schedule(&msc_a->cc.assignment_request_pending,
-			    osmo_tdef_get(msc_a->c.ran->tdefs, -37, OSMO_TDEF_S, 10), 0);
 
-	if (!cc_trans) {
-		LOG_MSC_A(msc_a, LOGL_ERROR, "No CC transaction active\n");
+	if (!trans_is_live(cc_trans) || cc_trans->type != TRANS_CC) {
+		LOG_MSC_A(msc_a, LOGL_ERROR, "No live CC transaction active\n");
+		if (msc_a->cc.active_trans == cc_trans)
+			msc_a->cc.active_trans = NULL;
 		call_leg_release(msc_a->cc.call_leg);
 		return;
 	}
 
+	osmo_timer_setup(&msc_a->cc.assignment_request_pending, assignment_request_timeout_cb, msc_a);
+	osmo_timer_schedule(&msc_a->cc.assignment_request_pending,
+			    osmo_tdef_get(msc_a->c.ran->tdefs, -37, OSMO_TDEF_S, 10), 0);
+
 	trans_cc_filter_run(cc_trans);
+	if (!trans_is_live(cc_trans) || msc_a->cc.active_trans != cc_trans) {
+		osmo_timer_del(&msc_a->cc.assignment_request_pending);
+		LOG_MSC_A(msc_a, LOGL_ERROR, "CC transaction disappeared during codec/CSD filter\n");
+		return;
+	}
 	LOG_TRANS(cc_trans, LOGL_DEBUG, "Sending Assignment Command\n");
 
 	switch (cc_trans->bearer_cap.transfer) {
@@ -751,8 +765,10 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 	case GSM48_BCAP_ITCAP_3k1_AUDIO:
 	case GSM48_BCAP_ITCAP_FAX_G3:
 	case GSM48_BCAP_ITCAP_UNR_DIG_INF:
-		if (!cc_trans->cc.local.bearer_services.count) {
-			LOG_TRANS(cc_trans, LOGL_ERROR, "Assignment not possible, no matching bearer service: %s\n",
+		if (!csd_bs_list_is_sane(&cc_trans->cc.local.bearer_services)) {
+			LOG_TRANS(cc_trans, LOGL_ERROR,
+				  "Assignment not possible, invalid bearer service count %u: %s\n",
+				  cc_trans->cc.local.bearer_services.count,
 				  csd_filter_to_str(&cc_trans->cc.csd, &cc_trans->cc.local, &cc_trans->cc.remote));
 			msc_a_abort_assignment(msc_a, cc_trans);
 			return;

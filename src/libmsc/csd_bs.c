@@ -451,34 +451,35 @@ void csd_bs_list_intersection(struct csd_bs_list *dest, const struct csd_bs_list
 
 int csd_bs_list_to_gsm0808_channel_type(struct gsm0808_channel_type *ct, const struct csd_bs_list *list)
 {
+	struct gsm0808_channel_type tmp;
 	unsigned int i, n;
 	int rc;
 
-	if (!ct || !list)
+	if (!ct || !csd_bs_list_is_sane(list))
 		return -EINVAL;
 
-	*ct = (struct gsm0808_channel_type){
+	n = csd_bs_list_n(list);
+	if (!n || !csd_bs_valid(list->bs[0]))
+		return -EINVAL;
+
+	tmp = (struct gsm0808_channel_type){
 		.ch_indctr = GSM0808_CHAN_DATA,
 	};
 
-	n = csd_bs_list_n(list);
-	if (!n)
-		return -EINVAL;
-
 	if (csd_bs_is_transp(list->bs[0])) {
-		ct->data_transparent = true;
-		rc = csd_bs_to_gsm0808_data_rate_transp(list->bs[0], &ct->ch_rate_type);
+		tmp.data_transparent = true;
+		rc = csd_bs_to_gsm0808_data_rate_transp(list->bs[0], &tmp.ch_rate_type);
 	} else {
-		rc = csd_bs_to_gsm0808_data_rate_non_transp(list->bs[0], &ct->ch_rate_type);
+		rc = csd_bs_to_gsm0808_data_rate_non_transp(list->bs[0], &tmp.ch_rate_type);
 	}
 
 	if (rc < 0)
 		return -EINVAL;
 
-	ct->data_rate = rc;
+	tmp.data_rate = rc;
 
 	/* Other possible data rates allowed (3GPP TS 48.008 § 3.2.2.11, 5a) */
-	if (!ct->data_transparent && n > 1) {
+	if (!tmp.data_transparent && n > 1) {
 		for (i = 1; i < n; i++) {
 			if (!csd_bs_is_transp(list->bs[i]))
 				continue;
@@ -490,12 +491,13 @@ int csd_bs_list_to_gsm0808_channel_type(struct gsm0808_channel_type *ct, const s
 				continue;
 			}
 
-			ct->data_rate_allowed |= rc;
+			tmp.data_rate_allowed |= rc;
 		}
-		if (ct->data_rate_allowed)
-			ct->data_rate_allowed_is_set = true;
+		if (tmp.data_rate_allowed)
+			tmp.data_rate_allowed_is_set = true;
 	}
 
+	*ct = tmp;
 	return 0;
 }
 

@@ -1,6 +1,7 @@
 /* 3GPP TS 122.002 Bearer Services */
 #pragma once
 
+#include <stdbool.h>
 #include <osmocom/gsm/mncc.h>
 #include <osmocom/gsm/protocol/gsm_08_08.h>
 
@@ -34,6 +35,11 @@ struct csd_bs_list {
 	unsigned int count;
 	enum csd_bs bs[CSD_BS_MAX];
 };
+
+static inline bool csd_bs_list_is_sane(const struct csd_bs_list *list)
+{
+	return list && list->count > 0 && list->count <= CSD_BS_MAX;
+}
 
 void csd_bs_list_add_bs(struct csd_bs_list *list, enum csd_bs bs);
 int csd_bs_list_to_bearer_cap(struct gsm_mncc_bearer_cap *cap, const struct csd_bs_list *list);

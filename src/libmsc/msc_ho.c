@@ -36,6 +36,7 @@
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/vlr/vlr.h>
 #include <osmocom/msc/transaction.h>
+#include <osmocom/msc/csd_bs.h>
 #include <osmocom/msc/gsm_04_08.h>
 #include <osmocom/msc/call_leg.h>
 #include <osmocom/msc/rtp_stream.h>
@@ -426,7 +427,9 @@ static void msc_ho_send_handover_request(struct msc_a *msc_a)
 		case GSM48_BCAP_ITCAP_3k1_AUDIO:
 		case GSM48_BCAP_ITCAP_FAX_G3:
 		case GSM48_BCAP_ITCAP_UNR_DIG_INF:
-			if (csd_bs_list_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.bearer_services)) {
+			if (!trans_is_live(cc_trans) ||
+			    !csd_bs_list_is_sane(&cc_trans->cc.local.bearer_services) ||
+			    csd_bs_list_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.bearer_services)) {
 				msc_ho_failed(msc_a, GSM0808_CAUSE_EQUIPMENT_FAILURE,
 					      "Failed to determine Channel Type for Handover Request message (CSD)\n");
 				return;
