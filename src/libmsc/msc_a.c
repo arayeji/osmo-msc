@@ -701,12 +701,15 @@ static void msc_a_abort_assignment(struct msc_a *msc_a, struct gsm_trans *cc_tra
 	msc_a_put(msc_a, __func__);
 }
 
+/* Single-threaded: keep Channel Type off the stack. After trans_cc_filter_run
+ * a smashed RBP made &channel_type == 0x100108 and the CSD compose SEGVd. */
+static struct gsm0808_channel_type assign_channel_type;
+
 /* The MGW has given us a local IP address for the RAN side. Ready to start the Assignment of a voice channel. */
 void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 {
 	struct ran_msg msg;
 	struct gsm_trans *cc_trans = msc_a->cc.active_trans;
-	struct gsm0808_channel_type channel_type;
 	struct gsm_network *net = msc_a_net(msc_a);
 
 	if (msc_a_in_release(msc_a)) {
@@ -755,7 +758,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 
 		/* Compose 48.008 Channel Type from the current set of codecs
 		 * determined from both local and remote codec capabilities. */
-		if (sdp_audio_codecs_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.audio_codecs)) {
+		if (sdp_audio_codecs_to_gsm0808_channel_type(&assign_channel_type, &cc_trans->cc.local.audio_codecs)) {
 			LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot compose Channel Type (Permitted Speech) from codecs: %s\n",
 				  codec_filter_to_str(&cc_trans->cc.codecs, &cc_trans->cc.local, &cc_trans->cc.remote));
 			msc_a_abort_assignment(msc_a, cc_trans);
@@ -765,7 +768,8 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 	case GSM48_BCAP_ITCAP_3k1_AUDIO:
 	case GSM48_BCAP_ITCAP_FAX_G3:
 	case GSM48_BCAP_ITCAP_UNR_DIG_INF:
-		if (!csd_bs_list_is_sane(&cc_trans->cc.local.bearer_services)) {
+		if (!csd_bs_list_is_sane(&cc_trans->cc.csd.ran) ||
+		    !csd_bs_list_is_sane(&cc_trans->cc.local.bearer_services)) {
 			LOG_TRANS(cc_trans, LOGL_ERROR,
 				  "Assignment not possible, invalid bearer service count %u: %s\n",
 				  cc_trans->cc.local.bearer_services.count,
@@ -776,7 +780,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 
 		/* Compose 48.008 Channel Type from the current set of bearer
 		 * services determined from local and remote capabilities. */
-		if (csd_bs_list_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.bearer_services)) {
+		if (csd_bs_list_to_gsm0808_channel_type(&assign_channel_type, &cc_trans->cc.local.bearer_services)) {
 			LOG_MSC_A(msc_a, LOGL_ERROR, "Cannot compose channel type from: %s\n",
 				  csd_filter_to_str(&cc_trans->cc.csd, &cc_trans->cc.local, &cc_trans->cc.remote));
 			msc_a_abort_assignment(msc_a, cc_trans);
@@ -801,7 +805,7 @@ void msc_a_tx_assignment_cmd(struct msc_a *msc_a)
 		.msg_type = RAN_MSG_ASSIGNMENT_COMMAND,
 		.assignment_command = {
 			.cn_rtp = &msc_a->cc.call_leg->rtp[RTP_TO_RAN]->local,
-			.channel_type = &channel_type,
+			.channel_type = &assign_channel_type,
 			.osmux_present = msc_a->cc.call_leg->rtp[RTP_TO_RAN]->use_osmux,
 			.osmux_cid = msc_a->cc.call_leg->rtp[RTP_TO_RAN]->local_osmux_cid,
 			.rtp_extensions = net->tw_rtp_formats,

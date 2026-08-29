@@ -21,6 +21,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <errno.h>
+#include <stdint.h>
 
 #include <osmocom/core/utils.h>
 #include <osmocom/msc/csd_bs.h>
@@ -495,6 +496,13 @@ int csd_bs_list_to_gsm0808_channel_type(struct gsm0808_channel_type *ct, const s
 		}
 		if (tmp.data_rate_allowed)
 			tmp.data_rate_allowed_is_set = true;
+	}
+
+	/* 0x100108 was &stack_ct after a smashed RBP. Refuse low ct. */
+	if ((uintptr_t)ct < 0x400000UL) {
+		LOGP(DMSC, LOGL_ERROR, "csd_bs_list_to_gsm0808_channel_type: implausible ct %p\n",
+		     ct);
+		return -EINVAL;
 	}
 
 	*ct = tmp;

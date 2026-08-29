@@ -377,11 +377,12 @@ static void msc_ho_fsm_required_onenter(struct osmo_fsm_inst *fi, uint32_t prev_
 	msc_ho_fsm_state_chg(msc_a, MSC_HO_ST_WAIT_REQUEST_ACK);
 }
 
+static struct gsm0808_channel_type ho_channel_type;
+
 static void msc_ho_send_handover_request(struct msc_a *msc_a)
 {
 	struct vlr_subscr *vsub = msc_a_vsub(msc_a);
 	struct gsm_network *net = msc_a_net(msc_a);
-	struct gsm0808_channel_type channel_type;
 	struct gsm0808_speech_codec_list scl = {};
 	struct gsm_trans *cc_trans = msc_a->cc.active_trans;
 	struct ran_msg ran_enc_msg = {
@@ -417,7 +418,7 @@ static void msc_ho_send_handover_request(struct msc_a *msc_a)
 	if (cc_trans) {
 		switch (cc_trans->bearer_cap.transfer) {
 		case GSM48_BCAP_ITCAP_SPEECH:
-			if (sdp_audio_codecs_to_gsm0808_channel_type(&channel_type,
+			if (sdp_audio_codecs_to_gsm0808_channel_type(&ho_channel_type,
 								     &cc_trans->cc.local.audio_codecs)) {
 				msc_ho_failed(msc_a, GSM0808_CAUSE_EQUIPMENT_FAILURE,
 					      "Failed to determine Channel Type for Handover Request message (speech)\n");
@@ -429,7 +430,7 @@ static void msc_ho_send_handover_request(struct msc_a *msc_a)
 		case GSM48_BCAP_ITCAP_UNR_DIG_INF:
 			if (!trans_is_live(cc_trans) ||
 			    !csd_bs_list_is_sane(&cc_trans->cc.local.bearer_services) ||
-			    csd_bs_list_to_gsm0808_channel_type(&channel_type, &cc_trans->cc.local.bearer_services)) {
+			    csd_bs_list_to_gsm0808_channel_type(&ho_channel_type, &cc_trans->cc.local.bearer_services)) {
 				msc_ho_failed(msc_a, GSM0808_CAUSE_EQUIPMENT_FAILURE,
 					      "Failed to determine Channel Type for Handover Request message (CSD)\n");
 				return;
@@ -442,7 +443,7 @@ static void msc_ho_send_handover_request(struct msc_a *msc_a)
 			return;
 		}
 
-		ran_enc_msg.handover_request.geran.channel_type = &channel_type;
+		ran_enc_msg.handover_request.geran.channel_type = &ho_channel_type;
 		ran_enc_msg.handover_request.call_id_present = true;
 		ran_enc_msg.handover_request.call_id = cc_trans->call_id;
 

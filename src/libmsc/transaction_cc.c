@@ -54,7 +54,7 @@ void trans_cc_filter_set_bss(struct gsm_trans *trans, struct msc_a *msc_a)
 
 void _trans_cc_filter_run(const char *file, int line, struct gsm_trans *trans)
 {
-	if (!trans || trans->freeing)
+	if (!trans_is_live(trans))
 		return;
 
 	switch (trans->bearer_cap.transfer) {
@@ -66,6 +66,11 @@ void _trans_cc_filter_run(const char *file, int line, struct gsm_trans *trans)
 	case GSM48_BCAP_ITCAP_3k1_AUDIO:
 	case GSM48_BCAP_ITCAP_FAX_G3:
 	case GSM48_BCAP_ITCAP_UNR_DIG_INF:
+		if (!csd_bs_list_is_sane(&trans->cc.csd.ran)) {
+			LOG_TRANS_CAT_SRC(trans, DCC, LOGL_ERROR, file, line,
+					  "CSD RAN bearer list not initialized, skip filter\n");
+			break;
+		}
 		csd_filter_run(&trans->cc.csd, &trans->cc.local, &trans->cc.remote);
 		LOG_TRANS_CAT_SRC(trans, DCC, LOGL_DEBUG, file, line, "codec/BS: %s\n",
 				  csd_filter_to_str(&trans->cc.csd, &trans->cc.local, &trans->cc.remote));

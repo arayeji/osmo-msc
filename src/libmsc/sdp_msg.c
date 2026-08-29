@@ -655,7 +655,7 @@ int sdp_msg_to_str_buf(char *buf, size_t buflen, const struct sdp_msg *sdp)
 	OSMO_STRBUF_PRINTF(sb, OSMO_SOCKADDR_STR_FMT, OSMO_SOCKADDR_STR_FMT_ARGS(&sdp->rtp));
 	OSMO_STRBUF_PRINTF(sb, "{");
 	OSMO_STRBUF_APPEND(sb, sdp_audio_codecs_to_str_buf, &sdp->audio_codecs);
-	if (sdp->bearer_services.count) {
+	if (csd_bs_list_is_sane(&sdp->bearer_services)) {
 		OSMO_STRBUF_PRINTF(sb, ",");
 		OSMO_STRBUF_APPEND(sb, csd_bs_list_to_str_buf, &sdp->bearer_services);
 	}

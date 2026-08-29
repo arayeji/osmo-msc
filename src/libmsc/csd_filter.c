@@ -91,11 +91,11 @@ int csd_filter_run(struct csd_filter *filter, struct sdp_msg *result, const stru
 
 	*r = filter->ran;
 
-	if (filter->ms.count)
+	if (csd_bs_list_is_sane(&filter->ms))
 		csd_bs_list_intersection(r, &filter->ms);
-	if (filter->bss.count)
+	if (csd_bs_list_is_sane(&filter->bss))
 		csd_bs_list_intersection(r, &filter->bss);
-	if (remote->bearer_services.count)
+	if (csd_bs_list_is_sane(&remote->bearer_services))
 		csd_bs_list_intersection(r, &remote->bearer_services);
 
 	/* Future: If osmo-msc were able to trigger a re-assignment [...] see
@@ -135,18 +135,18 @@ int csd_filter_to_str_buf(char *buf, size_t buflen, const struct csd_filter *fil
 		OSMO_STRBUF_APPEND(sb, csd_bs_to_str_buf, filter->assignment);
 	}
 
-	if (remote->bearer_services.count || osmo_sockaddr_str_is_nonzero(&remote->rtp)) {
+	if (csd_bs_list_is_sane(&remote->bearer_services) || osmo_sockaddr_str_is_nonzero(&remote->rtp)) {
 		OSMO_STRBUF_PRINTF(sb, " remote=");
 		OSMO_STRBUF_APPEND(sb, sdp_msg_to_str_buf, remote);
 	}
 
-	if (filter->ms.count) {
+	if (csd_bs_list_is_sane(&filter->ms)) {
 		OSMO_STRBUF_PRINTF(sb, " MS={");
 		OSMO_STRBUF_APPEND(sb, csd_bs_list_to_str_buf, &filter->ms);
 		OSMO_STRBUF_PRINTF(sb, "}");
 	}
 
-	if (filter->bss.count) {
+	if (csd_bs_list_is_sane(&filter->bss)) {
 		OSMO_STRBUF_PRINTF(sb, " bss={");
 		OSMO_STRBUF_APPEND(sb, csd_bs_list_to_str_buf, &filter->bss);
 		OSMO_STRBUF_PRINTF(sb, "}");
