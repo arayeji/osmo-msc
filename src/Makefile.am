@@ -31,4 +31,5 @@ endif
 # Programs
 SUBDIRS += \
 	osmo-msc \
+	osmo-msc-cdrenc \
 	$(NULL)

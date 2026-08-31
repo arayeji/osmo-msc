@@ -240,6 +240,7 @@ AC_OUTPUT(
     src/libvlr/Makefile
     src/libsmpputil/Makefile
     src/osmo-msc/Makefile
+    src/osmo-msc-cdrenc/Makefile
     src/utils/Makefile
     tests/Makefile
     tests/atlocal

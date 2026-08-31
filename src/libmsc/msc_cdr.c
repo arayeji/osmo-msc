@@ -1,7 +1,7 @@
 /* OsmoMSC charging ticket: CSV aligned with Huawei/OFCS CallEventRecord fields.
  *
- * OsmoMSC writes a human-readable ticket. A separate OFCS encoder turns
- * rotated files into Huawei bA*.dat. Default off until cdr filename is set.
+ * OsmoMSC writes a human-readable ticket. osmo-msc-cdrenc (separate process)
+ * turns rotated files into Huawei bA*.dat. Default off until cdr filename is set.
  */
 
 /* (C) 2026 by Osmocom contributors

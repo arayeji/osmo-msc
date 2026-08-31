@@ -1,0 +1,16 @@
+[Unit]
+Description=OsmoMSC Huawei CDR encoder (CSV to bA*.dat)
+After=osmo-msc.service
+Wants=osmo-msc.service
+After=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+User=osmocom
+Group=osmocom
+ExecStart=/usr/bin/osmo-msc-cdrenc --config /etc/osmocom/osmo-msc-cdrenc.cfg --watch
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
