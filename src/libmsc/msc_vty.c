@@ -128,6 +128,74 @@ DEFUN(cfg_net_mnc,
 	return CMD_SUCCESS;
 }
 
+static int parse_eplmn_args(struct vty *vty, const char *mcc_str, const char *mnc_str,
+			    struct osmo_plmn_id *plmn)
+{
+	if (osmo_mcc_from_str(mcc_str, &plmn->mcc)) {
+		vty_out(vty, "%% Error decoding MCC: %s%s", mcc_str, VTY_NEWLINE);
+		return -1;
+	}
+	if (osmo_mnc_from_str(mnc_str, &plmn->mnc, &plmn->mnc_3_digits)) {
+		vty_out(vty, "%% Error decoding MNC: %s%s", mnc_str, VTY_NEWLINE);
+		return -1;
+	}
+	return 0;
+}
+
+DEFUN(cfg_net_eplmn,
+      cfg_net_eplmn_cmd,
+      "equivalent-plmn <0-999> <0-999>",
+      "Add an equivalent PLMN advertised in Location Updating Accept (TS 24.008 10.5.1.13)\n"
+      "Mobile Country Code\n"
+      "Mobile Network Code\n")
+{
+	struct osmo_plmn_id plmn;
+	unsigned int i;
+
+	if (parse_eplmn_args(vty, argv[0], argv[1], &plmn))
+		return CMD_WARNING;
+
+	for (i = 0; i < gsmnet->eplmn_count; i++) {
+		if (osmo_plmn_cmp(&gsmnet->eplmn[i], &plmn) == 0)
+			return CMD_SUCCESS;
+	}
+	if (gsmnet->eplmn_count >= GSM_EPLMN_MAX) {
+		vty_out(vty, "%% At most %u equivalent PLMNs can be configured%s",
+			GSM_EPLMN_MAX, VTY_NEWLINE);
+		return CMD_WARNING;
+	}
+	gsmnet->eplmn[gsmnet->eplmn_count++] = plmn;
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_net_no_eplmn,
+      cfg_net_no_eplmn_cmd,
+      "no equivalent-plmn <0-999> <0-999>",
+      NO_STR
+      "Remove an equivalent PLMN\n"
+      "Mobile Country Code\n"
+      "Mobile Network Code\n")
+{
+	struct osmo_plmn_id plmn;
+	unsigned int i, j;
+
+	if (parse_eplmn_args(vty, argv[0], argv[1], &plmn))
+		return CMD_WARNING;
+
+	for (i = 0; i < gsmnet->eplmn_count; i++) {
+		if (osmo_plmn_cmp(&gsmnet->eplmn[i], &plmn) != 0)
+			continue;
+		for (j = i; j + 1 < gsmnet->eplmn_count; j++)
+			gsmnet->eplmn[j] = gsmnet->eplmn[j + 1];
+		gsmnet->eplmn_count--;
+		return CMD_SUCCESS;
+	}
+	vty_out(vty, "%% Equivalent PLMN %s-%s is not configured%s",
+		osmo_mcc_name(plmn.mcc), osmo_mnc_name(plmn.mnc, plmn.mnc_3_digits),
+		VTY_NEWLINE);
+	return CMD_WARNING;
+}
+
 DEFUN(cfg_net_name_short,
       cfg_net_name_short_cmd,
       "short name .NAME",
@@ -360,6 +428,12 @@ static int config_write_net(struct vty *vty)
 	vty_out(vty, " network country code %s%s", osmo_mcc_name(gsmnet->plmn.mcc), VTY_NEWLINE);
 	vty_out(vty, " mobile network code %s%s",
 		osmo_mnc_name(gsmnet->plmn.mnc, gsmnet->plmn.mnc_3_digits), VTY_NEWLINE);
+	for (i = 0; i < (int)gsmnet->eplmn_count; i++) {
+		vty_out(vty, " equivalent-plmn %s %s%s",
+			osmo_mcc_name(gsmnet->eplmn[i].mcc),
+			osmo_mnc_name(gsmnet->eplmn[i].mnc, gsmnet->eplmn[i].mnc_3_digits),
+			VTY_NEWLINE);
+	}
 	vty_out(vty, " short name %s%s", gsmnet->name_short, VTY_NEWLINE);
 	vty_out(vty, " long name %s%s", gsmnet->name_long, VTY_NEWLINE);
 	vty_out(vty, " encryption a5");
@@ -2123,6 +2197,8 @@ void msc_vty_init(struct gsm_network *msc_network)
 	install_node(&net_node, config_write_net);
 	install_element(GSMNET_NODE, &cfg_net_ncc_cmd);
 	install_element(GSMNET_NODE, &cfg_net_mnc_cmd);
+	install_element(GSMNET_NODE, &cfg_net_eplmn_cmd);
+	install_element(GSMNET_NODE, &cfg_net_no_eplmn_cmd);
 	install_element(GSMNET_NODE, &cfg_net_name_short_cmd);
 	install_element(GSMNET_NODE, &cfg_net_name_long_cmd);
 	install_element(GSMNET_NODE, &cfg_net_encryption_cmd);

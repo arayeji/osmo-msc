@@ -156,6 +156,12 @@ struct gsm_network {
 
 	struct osmo_plmn_id plmn;
 
+	/* Equivalent PLMNs (3GPP TS 24.008 10.5.1.13). The serving PLMN is
+	 * implicit and must not be included in the IE sent to the UE. */
+#define GSM_EPLMN_MAX 15
+	struct osmo_plmn_id eplmn[GSM_EPLMN_MAX];
+	unsigned int eplmn_count;
+
 	char *name_long;
 	char *name_short;
 

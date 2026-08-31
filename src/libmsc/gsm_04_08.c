@@ -65,6 +65,30 @@
 void *tall_locop_ctx;
 void *tall_authciphop_ctx;
 
+/* 3GPP TS 24.008 10.5.1.13 Equivalent PLMNs. libosmocore may not define this. */
+#ifndef GSM48_IE_PLMN_LIST
+#define GSM48_IE_PLMN_LIST	0x4A
+#endif
+
+/* Encode configured equivalent PLMNs, skipping the registered/serving PLMN. */
+static void gsm48_msgb_put_equiv_plmn(struct msgb *msg,
+				      const struct osmo_plmn_id *list,
+				      unsigned int count,
+				      const struct osmo_plmn_id *serving)
+{
+	uint8_t buf[GSM_EPLMN_MAX * 3];
+	unsigned int n = 0, i;
+
+	for (i = 0; i < count && n < GSM_EPLMN_MAX; i++) {
+		if (serving && osmo_plmn_cmp(&list[i], serving) == 0)
+			continue;
+		osmo_plmn_to_bcd(&buf[n * 3], &list[i]);
+		n++;
+	}
+	if (n)
+		msgb_tlv_put(msg, GSM48_IE_PLMN_LIST, n * 3, buf);
+}
+
 static int gsm0408_loc_upd_acc(struct msc_a *msc_a, uint32_t send_tmsi);
 
 /*! Send a simple GSM 04.08 message without any payload
@@ -164,9 +188,16 @@ static int gsm0408_loc_upd_acc(struct msc_a *msc_a, uint32_t send_tmsi)
 	}
 	*l = rc;
 
+	/* Optional: Equivalent PLMNs (3GPP TS 24.008 9.2.13 / 10.5.1.13) */
+	{
+		struct gsm_network *net = msc_a_net(msc_a);
+		if (net)
+			gsm48_msgb_put_equiv_plmn(msg, net->eplmn, net->eplmn_count,
+						  &vsub->cgi.lai.plmn);
+	}
+
 	/* TODO: Follow-on proceed */
 	/* TODO: CTS permission */
-	/* TODO: Equivalent PLMNs */
 	/* TODO: Emergency Number List */
 	/* TODO: Per-MS T3312 */
 
