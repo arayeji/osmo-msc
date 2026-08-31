@@ -44,6 +44,7 @@ smpp_mirror_LDADD = \
 	$(top_builddir)/src/libmsc/libmsc.a \
 	$(top_builddir)/src/libvlr/libvlr.a \
 	$(LIBOSMOCORE_LIBS) \
+	$(LIBOSMOCTRL_LIBS) \
 	$(LIBOSMOGSM_LIBS) \
 	$(LIBOSMOVTY_LIBS) \
 	$(LIBOSMONETIF_LIBS) \
