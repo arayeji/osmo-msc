@@ -8,6 +8,7 @@ AM_CFLAGS = \
 	-Wall \
 	$(LIBOSMOCORE_CFLAGS) \
 	$(LIBOSMOVTY_CFLAGS) \
+	$(LIBOSMOCTRL_CFLAGS) \
 	$(LIBOSMOABIS_CFLAGS) \
 	$(COVERAGE_CFLAGS) \
 	$(LIBSMPP34_CFLAGS) \
@@ -45,6 +46,7 @@ libmsc_a_SOURCES = \
 	mncc_builtin.c \
 	mncc_sock.c \
 	mncc_call.c \
+	msc_cdr.c \
 	msub.c \
 	msc_a.c \
 	msc_a_remote.c \

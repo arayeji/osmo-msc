@@ -20,6 +20,7 @@ noinst_HEADERS = \
 	mncc.h \
 	mncc_call.h \
 	mncc_int.h \
+	msc_cdr.h \
 	msc_a.h \
 	msc_a_remote.h \
 	msc_common.h \

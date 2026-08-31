@@ -58,6 +58,7 @@
 #include <osmocom/msc/msc_t.h>
 #include <osmocom/msc/sdp_msg.h>
 #include <osmocom/msc/codec_mapping.h>
+#include <osmocom/msc/msc_cdr.h>
 
 #include <osmocom/gsm/gsm48.h>
 #include <osmocom/gsm/gsm0480.h>
@@ -199,8 +200,10 @@ static void new_cc_state(struct gsm_trans *trans, int state)
 	trans->cc.state = state;
 
 	/* Stop the guard timer when a call reaches the active state */
-	if (state == GSM_CSTATE_ACTIVE)
+	if (state == GSM_CSTATE_ACTIVE) {
 		gsm48_stop_guard_timer(trans);
+		msc_cdr_note_answer(trans);
+	}
 }
 
 static int gsm48_cc_tx_status(struct gsm_trans *trans, void *arg)
@@ -340,6 +343,8 @@ int mncc_release_ind(struct gsm_network *net, struct gsm_trans *trans,
  * gets called by trans_free, DO NOT CALL YOURSELF! */
 void _gsm48_cc_trans_free(struct gsm_trans *trans)
 {
+	msc_cdr_call(trans);
+
 	gsm48_stop_cc_timer(trans);
 
 	/* send release to L4, if callref still exists */
@@ -713,6 +718,7 @@ static int gsm48_cc_rx_setup(struct gsm_trans *trans, struct msgb *msg)
 	 * note down the msg_type to indicate that we indeed composed an MNCC_SETUP_IND for later. */
 	setup.msg_type = MNCC_SETUP_IND;
 	trans->cc.msg = setup;
+	msc_cdr_note_setup(trans, &setup);
 	return msc_a_try_call_assignment(trans);
 	/* continue in gsm48_cc_rx_setup_cn_local_rtp_port_known() */
 }
@@ -1043,6 +1049,8 @@ static int gsm48_cc_tx_setup(struct gsm_trans *trans, void *arg)
 	struct gsm_mncc *setup = arg;
 	int rc;
 
+	msc_cdr_note_setup(trans, setup);
+
 	rc = gsm48_cc_tx_setup_set_transaction_id(trans);
 	if (rc < 0)
 		goto error;
@@ -1332,8 +1340,10 @@ static int gsm48_cc_tx_connect(struct gsm_trans *trans, void *arg)
 	if (connect->fields & MNCC_F_PROGRESS)
 		gsm48_encode_progress(msg, 0, &connect->progress);
 	/* connected number */
-	if (connect->fields & MNCC_F_CONNECTED)
+	if (connect->fields & MNCC_F_CONNECTED) {
 		gsm48_encode_connected(msg, &connect->connected);
+		msc_cdr_note_connected(trans, connect->connected.number);
+	}
 	/* user-user */
 	if (connect->fields & MNCC_F_USERUSER)
 		gsm48_encode_useruser(msg, 0, &connect->useruser);
@@ -1363,6 +1373,7 @@ static int gsm48_cc_rx_connect(struct gsm_trans *trans, struct msgb *msg)
 	connect.fields |= MNCC_F_CONNECTED;
 	OSMO_STRLCPY_ARRAY(connect.connected.number, trans->vsub->msisdn);
 	OSMO_STRLCPY_ARRAY(connect.imsi, trans->vsub->imsi);
+	msc_cdr_note_connected(trans, connect.connected.number);
 
 	/* facility */
 	if (TLVP_PRESENT(&tp, GSM48_IE_FACILITY)) {
@@ -1439,6 +1450,7 @@ static int gsm48_cc_rx_disconnect(struct gsm_trans *trans, struct msgb *msg)
 		disc.fields |= MNCC_F_CAUSE;
 		gsm48_decode_cause(&disc.cause,
 			     TLVP_VAL(&tp, GSM48_IE_CAUSE)-1);
+		msc_cdr_note_cause(trans, &disc.cause);
 	}
 	/* facility */
 	if (TLVP_PRESENT(&tp, GSM48_IE_FACILITY)) {
@@ -1501,6 +1513,8 @@ static int gsm48_cc_tx_disconnect(struct gsm_trans *trans, void *arg)
 
 	/* store disconnect cause for T306 expiry */
 	memcpy(&trans->cc.msg, disc, sizeof(struct gsm_mncc));
+	if (disc->fields & MNCC_F_CAUSE)
+		msc_cdr_note_cause(trans, &disc->cause);
 
 	new_cc_state(trans, GSM_CSTATE_DISCONNECT_IND);
 
@@ -1525,6 +1539,7 @@ static int gsm48_cc_rx_release(struct gsm_trans *trans, struct msgb *msg)
 		rel.fields |= MNCC_F_CAUSE;
 		gsm48_decode_cause(&rel.cause,
 			     TLVP_VAL(&tp, GSM48_IE_CAUSE)-1);
+		msc_cdr_note_cause(trans, &rel.cause);
 	}
 	/* facility */
 	if (TLVP_PRESENT(&tp, GSM48_IE_FACILITY)) {
@@ -1594,6 +1609,8 @@ static int gsm48_cc_tx_release(struct gsm_trans *trans, void *arg)
 
 	trans->cc.T308_second = 0;
 	memcpy(&trans->cc.msg, rel, sizeof(struct gsm_mncc));
+	if (rel->fields & MNCC_F_CAUSE)
+		msc_cdr_note_cause(trans, &rel->cause);
 
 	if (trans->cc.state != GSM_CSTATE_RELEASE_REQ)
 		new_cc_state(trans, GSM_CSTATE_RELEASE_REQ);
@@ -1619,6 +1636,7 @@ static int gsm48_cc_rx_release_compl(struct gsm_trans *trans, struct msgb *msg)
 		rel.fields |= MNCC_F_CAUSE;
 		gsm48_decode_cause(&rel.cause,
 			     TLVP_VAL(&tp, GSM48_IE_CAUSE)-1);
+		msc_cdr_note_cause(trans, &rel.cause);
 	}
 	/* facility */
 	if (TLVP_PRESENT(&tp, GSM48_IE_FACILITY)) {
@@ -2490,6 +2508,7 @@ static int mncc_tx_to_gsm_cc(struct gsm_network *net, const union mncc_msg *msg)
 
 			/* store setup information until paging succeeds */
 			memcpy(&trans->cc.msg, data, sizeof(struct gsm_mncc));
+			msc_cdr_note_setup(trans, data);
 
 			/* Request a channel. If Paging already started, paging_request_start() will append the new
 			 * trans to the already ongoing Paging. */

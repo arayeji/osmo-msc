@@ -1,5 +1,7 @@
 #pragma once
 
+#include <time.h>
+
 #include <osmocom/msc/gsm_data.h>
 #include <osmocom/msc/gsm_subscriber.h>
 #include <osmocom/core/linuxlist.h>
@@ -180,6 +182,32 @@ struct gsm_trans {
 		struct gsm_trans *peer;
 		enum bridge_state state;
 	} bridge;
+
+	/* CS/SMS CDR snapshot collected while the transaction is alive. */
+	struct {
+		bool written;
+		bool setup_seen;
+		time_t t_setup;
+		time_t t_answer;
+		uint32_t setup_msg_type;
+		char calling[33];
+		char called[33];
+		char connected[33];
+		char redirecting[33];
+		int calling_type;
+		int calling_plan;
+		int calling_present;
+		int calling_screen;
+		int called_type;
+		int called_plan;
+		int emergency;
+		int clir_sup;
+		int clir_inv;
+		bool cause_present;
+		int cause;
+		int cause_loc;
+		int cause_coding;
+	} cdr;
 };
 
 

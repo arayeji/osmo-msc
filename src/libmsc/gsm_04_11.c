@@ -57,6 +57,7 @@
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/msc_a.h>
 #include <osmocom/msc/paging.h>
+#include <osmocom/msc/msc_cdr.h>
 
 #ifdef BUILD_SMPP
 #include <osmocom/smpp/smpp_smsc.h>
@@ -67,7 +68,11 @@ static uint32_t new_callref = 0x40000001;
 
 struct gsm_sms *sms_alloc(void)
 {
-	return talloc_zero(tall_gsms_ctx, struct gsm_sms);
+	struct gsm_sms *sms = talloc_zero(tall_gsms_ctx, struct gsm_sms);
+
+	if (sms)
+		sms->created = time(NULL);
+	return sms;
 }
 
 void sms_free(struct gsm_sms *sms)
@@ -719,6 +724,9 @@ int gsm411_send_rp_ack(struct gsm_trans *trans, uint8_t msg_ref)
 
 	LOG_TRANS(trans, LOGL_DEBUG, "TX: SMS RP ACK\n");
 
+	if (trans->sms.sms)
+		msc_cdr_sms(trans, trans->sms.sms, "delivered", 0);
+
 	return gsm411_rp_sendmsg(&trans->sms.smr_inst, msg, GSM411_MT_RP_ACK_MT,
 		msg_ref, GSM411_SM_RL_REPORT_REQ);
 }
@@ -732,6 +740,9 @@ int gsm411_send_rp_error(struct gsm_trans *trans, uint8_t msg_ref,
 
 	LOG_TRANS(trans, LOGL_NOTICE, "TX: SMS RP ERROR, cause %d (%s)\n", cause,
 		get_value_string(gsm411_rp_cause_strs, cause));
+
+	if (trans->sms.sms)
+		msc_cdr_sms(trans, trans->sms.sms, "failed", cause);
 
 	return gsm411_rp_sendmsg(&trans->sms.smr_inst, msg,
 		GSM411_MT_RP_ERROR_MT, msg_ref, GSM411_SM_RL_REPORT_REQ);
@@ -870,6 +881,9 @@ static int gsm411_rx_rp_ack(struct gsm_trans *trans,
 	 * successfully received a SMS.  We can now safely mark it as
 	 * transmitted */
 
+	if (sms)
+		msc_cdr_sms(trans, sms, "delivered", 0);
+
 	if (trans->net->sms_over_gsup) {
 		/* Forward towards SMSC via GSUP */
 		uint8_t ui_len = 0;
@@ -919,6 +933,9 @@ static int gsm411_rx_rp_error(struct gsm_trans *trans,
 
 	LOG_TRANS(trans, LOGL_NOTICE, "RX SMS RP-ERROR, cause %d:%d (%s)\n",
 		      cause_len, cause, get_value_string(gsm411_rp_cause_strs, cause));
+
+	if (sms)
+		msc_cdr_sms(trans, sms, "failed", cause);
 
 	if (cause == GSM411_RP_CAUSE_MT_MEM_EXCEEDED)
 		rate_ctr_inc2(net->msc_ctrs, MSC_CTR_SMS_RP_ERR_MEM);
@@ -1466,6 +1483,7 @@ void _gsm411_sms_trans_free(struct gsm_trans *trans)
 	if (trans->sms.sms) {
 		struct gsm_sms *sms = trans->sms.sms;
 		trans->sms.sms = NULL;
+		msc_cdr_sms(trans, sms, "abandoned", 0);
 		if (trans->msc_a && msc_a_in_release(trans->msc_a)) {
 			LOG_TRANS(trans, LOGL_NOTICE, "Discarding SMS on releasing connection\n");
 			sms_free(sms);

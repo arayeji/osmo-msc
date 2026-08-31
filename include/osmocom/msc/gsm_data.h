@@ -308,6 +308,12 @@ struct gsm_network {
 		bool enable;
 		struct llist_head gcr_lists;
 	} asci;
+
+	/* CS/SMS CDR (file and/or CTRL trap). Disabled until configured. */
+	struct {
+		char *filename;
+		bool trap;
+	} cdr;
 };
 
 struct smpp_esme;

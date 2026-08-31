@@ -67,6 +67,7 @@
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/msc/ran_infra.h>
 #include <osmocom/msc/asci_vty.h>
+#include <osmocom/core/talloc.h>
 
 static struct gsm_network *gsmnet = NULL;
 
@@ -699,6 +700,42 @@ DEFUN(cfg_msc_no_sms_over_gsup, cfg_msc_no_sms_over_gsup_cmd,
 	return CMD_SUCCESS;
 }
 
+DEFUN(cfg_msc_cdr_filename, cfg_msc_cdr_filename_cmd,
+      "cdr filename NAME",
+      "Call Detail Records for CS calls and SMS\n"
+      "Write one CSV line per completed call or SMS\n"
+      "Path of the CDR file\n")
+{
+	osmo_talloc_replace_string(gsmnet, &gsmnet->cdr.filename, argv[0]);
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_no_cdr_filename, cfg_msc_no_cdr_filename_cmd,
+      "no cdr filename",
+      NO_STR "Call Detail Records for CS calls and SMS\nDisable writing CDR to a file\n")
+{
+	talloc_free(gsmnet->cdr.filename);
+	gsmnet->cdr.filename = NULL;
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_cdr_trap, cfg_msc_cdr_trap_cmd,
+      "cdr trap",
+      "Call Detail Records for CS calls and SMS\n"
+      "Also send each CDR line as a CTRL trap named cdr-v1\n")
+{
+	gsmnet->cdr.trap = true;
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_no_cdr_trap, cfg_msc_no_cdr_trap_cmd,
+      "no cdr trap",
+      NO_STR "Call Detail Records for CS calls and SMS\nDisable CTRL CDR traps\n")
+{
+	gsmnet->cdr.trap = false;
+	return CMD_SUCCESS;
+}
+
 /* FIXME: This should rather be in the form of
  *  handover-number range 001234xxx
  * and
@@ -912,6 +949,13 @@ static int config_write_msc(struct vty *vty)
 
 	if (gsmnet->sms_over_gsup)
 		vty_out(vty, " sms-over-gsup%s", VTY_NEWLINE);
+
+	if (gsmnet->cdr.filename)
+		vty_out(vty, " cdr filename %s%s", gsmnet->cdr.filename, VTY_NEWLINE);
+	else
+		vty_out(vty, " no cdr filename%s", VTY_NEWLINE);
+	if (gsmnet->cdr.trap)
+		vty_out(vty, " cdr trap%s", VTY_NEWLINE);
 
 	if (gsmnet->handover_number.range_start || gsmnet->handover_number.range_end)
 		vty_out(vty, " handover-number range %"PRIu64" %"PRIu64"%s",
@@ -2237,6 +2281,10 @@ void msc_vty_init(struct gsm_network *msc_network)
 	install_element(MSC_NODE, &cfg_msc_emergency_msisdn_cmd);
 	install_element(MSC_NODE, &cfg_msc_sms_over_gsup_cmd);
 	install_element(MSC_NODE, &cfg_msc_no_sms_over_gsup_cmd);
+	install_element(MSC_NODE, &cfg_msc_cdr_filename_cmd);
+	install_element(MSC_NODE, &cfg_msc_no_cdr_filename_cmd);
+	install_element(MSC_NODE, &cfg_msc_cdr_trap_cmd);
+	install_element(MSC_NODE, &cfg_msc_no_cdr_trap_cmd);
 	install_element(MSC_NODE, &cfg_msc_osmux_cmd);
 	install_element(MSC_NODE, &cfg_msc_twformat_cmd);
 	install_element(MSC_NODE, &cfg_msc_no_twformat_cmd);
