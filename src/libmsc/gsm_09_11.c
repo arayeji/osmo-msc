@@ -48,6 +48,7 @@
 #include <osmocom/msc/transaction.h>
 #include <osmocom/gsupclient/gsup_client.h>
 #include <osmocom/msc/msc_a.h>
+#include <osmocom/msc/msc_cdr.h>
 #include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/paging.h>
@@ -424,6 +425,8 @@ void _gsm911_nc_ss_trans_free(struct gsm_trans *trans)
 
 	/* Stop inactivity timer */
 	osmo_timer_del(&trans->ss.timer_guard);
+
+	msc_cdr_ss(trans);
 
 	/* One session less */
 	osmo_stat_item_dec(osmo_stat_item_group_get_item(trans->net->statg, MSC_STAT_ACTIVE_NC_SS),

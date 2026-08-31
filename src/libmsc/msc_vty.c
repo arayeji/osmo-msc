@@ -68,6 +68,7 @@
 #include <osmocom/msc/ran_infra.h>
 #include <osmocom/msc/asci_vty.h>
 #include <osmocom/core/talloc.h>
+#include <osmocom/msc/msc_cdr.h>
 
 static struct gsm_network *gsmnet = NULL;
 
@@ -707,6 +708,7 @@ DEFUN(cfg_msc_cdr_filename, cfg_msc_cdr_filename_cmd,
       "Path of the CDR file\n")
 {
 	osmo_talloc_replace_string(gsmnet, &gsmnet->cdr.filename, argv[0]);
+	msc_cdr_reconfigure(gsmnet);
 	return CMD_SUCCESS;
 }
 
@@ -716,6 +718,7 @@ DEFUN(cfg_msc_no_cdr_filename, cfg_msc_no_cdr_filename_cmd,
 {
 	talloc_free(gsmnet->cdr.filename);
 	gsmnet->cdr.filename = NULL;
+	msc_cdr_reconfigure(gsmnet);
 	return CMD_SUCCESS;
 }
 
@@ -733,6 +736,68 @@ DEFUN(cfg_msc_no_cdr_trap, cfg_msc_no_cdr_trap_cmd,
       NO_STR "Call Detail Records for CS calls and SMS\nDisable CTRL CDR traps\n")
 {
 	gsmnet->cdr.trap = false;
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_cdr_recording_entity, cfg_msc_cdr_recording_entity_cmd,
+      "cdr recording-entity NAME",
+      "Call Detail Records for CS calls and SMS\n"
+      "Identity written as recordingEntity / mSCAddress\n"
+      "GT-like or IPA name\n")
+{
+	osmo_talloc_replace_string(gsmnet, &gsmnet->cdr.recording_entity, argv[0]);
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_no_cdr_recording_entity, cfg_msc_no_cdr_recording_entity_cmd,
+      "no cdr recording-entity",
+      NO_STR "Call Detail Records for CS calls and SMS\n"
+      "Use msc IPA name as recording entity\n")
+{
+	talloc_free(gsmnet->cdr.recording_entity);
+	gsmnet->cdr.recording_entity = NULL;
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_cdr_interval, cfg_msc_cdr_interval_cmd,
+      "cdr interval <1-2147483647>",
+      "Call Detail Records for CS calls and SMS\n"
+      "Write a partial call row every N seconds while the call is active\n"
+      "Interval in seconds\n")
+{
+	gsmnet->cdr.interval = atoi(argv[0]);
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_no_cdr_interval, cfg_msc_no_cdr_interval_cmd,
+      "no cdr interval",
+      NO_STR "Call Detail Records for CS calls and SMS\nDisable partial call CDRs\n")
+{
+	gsmnet->cdr.interval = 0;
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_cdr_rotate, cfg_msc_cdr_rotate_cmd,
+      "cdr rotate (hourly|daily)",
+      "Call Detail Records for CS calls and SMS\n"
+      "Rename the CDR file when the period ends so a collector can pick it up\n"
+      "Rotate at the start of each UTC hour\n"
+      "Rotate at the start of each UTC day\n")
+{
+	if (!strcmp(argv[0], "hourly"))
+		gsmnet->cdr.rotate = MSC_CDR_ROTATE_HOURLY;
+	else
+		gsmnet->cdr.rotate = MSC_CDR_ROTATE_DAILY;
+	msc_cdr_reconfigure(gsmnet);
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_msc_no_cdr_rotate, cfg_msc_no_cdr_rotate_cmd,
+      "no cdr rotate",
+      NO_STR "Call Detail Records for CS calls and SMS\nKeep a single CDR file\n")
+{
+	gsmnet->cdr.rotate = MSC_CDR_ROTATE_NONE;
+	msc_cdr_reconfigure(gsmnet);
 	return CMD_SUCCESS;
 }
 
@@ -956,6 +1021,14 @@ static int config_write_msc(struct vty *vty)
 		vty_out(vty, " no cdr filename%s", VTY_NEWLINE);
 	if (gsmnet->cdr.trap)
 		vty_out(vty, " cdr trap%s", VTY_NEWLINE);
+	if (gsmnet->cdr.recording_entity)
+		vty_out(vty, " cdr recording-entity %s%s", gsmnet->cdr.recording_entity, VTY_NEWLINE);
+	if (gsmnet->cdr.interval)
+		vty_out(vty, " cdr interval %u%s", gsmnet->cdr.interval, VTY_NEWLINE);
+	if (gsmnet->cdr.rotate == MSC_CDR_ROTATE_HOURLY)
+		vty_out(vty, " cdr rotate hourly%s", VTY_NEWLINE);
+	else if (gsmnet->cdr.rotate == MSC_CDR_ROTATE_DAILY)
+		vty_out(vty, " cdr rotate daily%s", VTY_NEWLINE);
 
 	if (gsmnet->handover_number.range_start || gsmnet->handover_number.range_end)
 		vty_out(vty, " handover-number range %"PRIu64" %"PRIu64"%s",
@@ -2285,6 +2358,12 @@ void msc_vty_init(struct gsm_network *msc_network)
 	install_element(MSC_NODE, &cfg_msc_no_cdr_filename_cmd);
 	install_element(MSC_NODE, &cfg_msc_cdr_trap_cmd);
 	install_element(MSC_NODE, &cfg_msc_no_cdr_trap_cmd);
+	install_element(MSC_NODE, &cfg_msc_cdr_recording_entity_cmd);
+	install_element(MSC_NODE, &cfg_msc_no_cdr_recording_entity_cmd);
+	install_element(MSC_NODE, &cfg_msc_cdr_interval_cmd);
+	install_element(MSC_NODE, &cfg_msc_no_cdr_interval_cmd);
+	install_element(MSC_NODE, &cfg_msc_cdr_rotate_cmd);
+	install_element(MSC_NODE, &cfg_msc_no_cdr_rotate_cmd);
 	install_element(MSC_NODE, &cfg_msc_osmux_cmd);
 	install_element(MSC_NODE, &cfg_msc_twformat_cmd);
 	install_element(MSC_NODE, &cfg_msc_no_twformat_cmd);

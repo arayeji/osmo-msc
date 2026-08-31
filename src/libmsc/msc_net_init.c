@@ -33,6 +33,7 @@
 #include <osmocom/gsupclient/gsup_client_mux.h>
 #include <osmocom/msc/gsm_04_11_gsup.h>
 #include <osmocom/msc/gsm_09_11.h>
+#include <osmocom/msc/msc_cdr.h>
 
 /* TODO: would be great to have all timer declarations in one place */
 #include <osmocom/msc/ran_infra.h>
@@ -95,6 +96,8 @@ struct gsm_network *gsm_network_init(void *ctx, mncc_recv_cb_t mncc_recv)
 
 	net->mncc_tdefs = mncc_tdefs;
 	net->mncc_recv = mncc_recv;
+
+	msc_cdr_init(net);
 
 	return net;
 }

@@ -70,6 +70,12 @@ OsmoMSC(config-msc)# list
   no cdr filename
   cdr trap
   no cdr trap
+  cdr recording-entity NAME
+  no cdr recording-entity
+  cdr interval <1-2147483647>
+  no cdr interval
+  cdr rotate (hourly|daily)
+  no cdr rotate
   osmux (on|off|only)
   tw-rtp-formats (fr|hr|amr|csd) [(fr|hr|amr|csd)] [(fr|hr|amr|csd)] [(fr|hr|amr|csd)]
   no tw-rtp-formats

@@ -58,6 +58,7 @@
 #include <osmocom/msc/msc_roles.h>
 #include <osmocom/msc/call_leg.h>
 #include <osmocom/msc/paging.h>
+#include <osmocom/msc/msc_cdr.h>
 
 #include <assert.h>
 
@@ -136,6 +137,8 @@ static int gsm0408_loc_upd_rej(struct msc_a *msc_a, uint8_t cause)
 
 	LOG_MSC_A_CAT(msc_a, DMM, LOGL_INFO, "LOCATION UPDATING REJECT\n");
 
+	msc_cdr_lu(msc_a_net(msc_a), msc_a_vsub(msc_a), msc_a, false);
+
 	return msc_a_tx_dtap_to_i(msc_a, msg);
 }
 
@@ -201,6 +204,7 @@ static int gsm0408_loc_upd_acc(struct msc_a *msc_a, uint32_t send_tmsi)
 	/* TODO: Emergency Number List */
 	/* TODO: Per-MS T3312 */
 
+	msc_cdr_lu(msc_a_net(msc_a), vsub, msc_a, true);
 
 	return msc_a_tx_dtap_to_i(msc_a, msg);
 }

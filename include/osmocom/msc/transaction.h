@@ -189,7 +189,9 @@ struct gsm_trans {
 		bool setup_seen;
 		time_t t_setup;
 		time_t t_answer;
+		time_t t_alert;
 		uint32_t setup_msg_type;
+		uint32_t sequence_number;
 		char calling[33];
 		char called[33];
 		char connected[33];
@@ -207,6 +209,7 @@ struct gsm_trans {
 		int cause;
 		int cause_loc;
 		int cause_coding;
+		struct osmo_timer_list interval_timer;
 	} cdr;
 };
 

@@ -5,6 +5,7 @@
 #include <regex.h>
 #include <sys/types.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include <osmocom/core/timer.h>
 #include <osmocom/core/rate_ctr.h>
@@ -313,6 +314,12 @@ struct gsm_network {
 	struct {
 		char *filename;
 		bool trap;
+		char *recording_entity;
+		unsigned int interval;
+		int rotate; /* enum msc_cdr_rotate */
+		struct osmo_timer_list rotate_timer;
+		uint64_t next_record_number;
+		time_t rotate_anchor;
 	} cdr;
 };
 
