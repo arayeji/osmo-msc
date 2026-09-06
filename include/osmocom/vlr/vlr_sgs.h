@@ -21,6 +21,7 @@
 #pragma once
 
 #include <osmocom/gsm/gsm29118.h>
+#include <osmocom/gsm/protocol/gsm_04_08.h>
 
 enum vlr_lu_type;
 struct vlr_subscr;
@@ -76,6 +77,11 @@ static inline const char *vlr_sgs_state_counter_name(enum vlr_sgs_state_ctr Ns)
 struct sgs_lu_response {
 	bool accepted;
 	bool error;
+	/* Reject cause for the SGsAP-LOCATION-UPDATE-REJECT. The Reject Cause IE
+	 * carries the value part of the 3GPP TS 24.008 Reject cause IE (3GPP TS
+	 * 29.118 9.4.13), not an SGs cause. Only meaningful when !accepted; 0
+	 * means "unset", the sender then uses GSM48_REJECT_NETWORK_FAILURE. */
+	enum gsm48_reject_value cause;
 	struct vlr_subscr *vsub;
 };
 typedef void (*vlr_sgs_lu_response_cb_t) (struct sgs_lu_response *response);

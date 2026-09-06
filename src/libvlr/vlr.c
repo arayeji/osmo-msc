@@ -1277,6 +1277,9 @@ static int vlr_subscr_handle_lu_err(struct vlr_subscr *vsub,
 
 	if (sgs_lu_in_progress) {
 		sgs_lu_response.accepted = false;
+		/* Hand the HLR's GMM cause to the MME/UE. Dropping it made every
+		 * transient HLR failure look like a permanent subscriber problem. */
+		sgs_lu_response.cause = vlr_gmm_cause_to_reject_cause_domain(gsup->cause, true);
 		sgs_lu_response.vsub = vsub;
 		vsub->sgs.response_cb(&sgs_lu_response);
 	} else
@@ -1788,6 +1791,10 @@ int vlr_subscr_rx_auth_resp(struct vlr_subscr *vsub, bool is_r99,
 /* MSC->VLR: Receive result of Ciphering Mode Command from MS */
 void vlr_subscr_rx_ciph_res(struct vlr_subscr *vsub, enum vlr_ciph_result_cause result)
 {
+	/* Cipher Mode Complete/Reject can arrive after the conn lost its VLR
+	 * subscriber (release, expire, failed LU). Do not dereference. */
+	if (!vsub)
+		return;
 	if (vsub->lu_fsm && vsub->lu_fsm->state == VLR_ULA_S_WAIT_CIPH)
 		osmo_fsm_inst_dispatch(vsub->lu_fsm, VLR_ULA_E_CIPH_RES, &result);
 	if (vsub->proc_arq_fsm

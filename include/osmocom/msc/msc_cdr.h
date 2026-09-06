@@ -21,6 +21,7 @@ struct msc_a;
 
 enum msc_cdr_rotate {
 	MSC_CDR_ROTATE_NONE = 0,
+	MSC_CDR_ROTATE_5MIN,
 	MSC_CDR_ROTATE_HOURLY,
 	MSC_CDR_ROTATE_DAILY,
 };

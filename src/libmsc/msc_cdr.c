@@ -14,6 +14,7 @@
 #include <osmocom/core/timer.h>
 #include <osmocom/core/utils.h>
 #include <osmocom/gsm/gsm23003.h>
+#include <osmocom/gsm/gsm29118.h>
 #include <osmocom/gsm/gsm_utils.h>
 #include <osmocom/gsm/mncc.h>
 #include <osmocom/gsm/protocol/gsm_04_08.h>
@@ -222,12 +223,123 @@ static void fill_cipher(const struct gsm_trans *trans, const struct msc_a *msc_a
 	snprintf(buf, len, "%u", a->geran_encr.alg_id);
 }
 
+static bool plmn_has_mcc(const struct osmo_plmn_id *plmn)
+{
+	return plmn && plmn->mcc;
+}
+
+static void fmt_plmn(char *mcc, size_t mccl, char *mnc, size_t mncl,
+		     const struct osmo_plmn_id *plmn)
+{
+	snprintf(mcc, mccl, "%03u", plmn->mcc);
+	if (plmn->mnc_3_digits)
+		snprintf(mnc, mncl, "%03u", plmn->mnc);
+	else
+		snprintf(mnc, mncl, "%02u", plmn->mnc);
+}
+
+static bool plmn_from_mme(const char *mme, struct osmo_plmn_id *plmn)
+{
+	struct osmo_gummei gummei;
+
+	if (!mme || !mme[0])
+		return false;
+	if (osmo_parse_mme_domain(&gummei, mme) < 0 || !gummei.plmn.mcc)
+		return false;
+	*plmn = gummei.plmn;
+	return true;
+}
+
+/* Last resort: IMSI MCC (3) + MNC (2). Do not guess a 3-digit MNC. */
+static bool plmn_from_imsi(const char *imsi, struct osmo_plmn_id *plmn)
+{
+	unsigned int i, n = 0;
+	char d[6];
+
+	if (!imsi)
+		return false;
+	for (i = 0; imsi[i] && n < 5; i++) {
+		if (imsi[i] < '0' || imsi[i] > '9')
+			continue;
+		d[n++] = imsi[i];
+	}
+	if (n < 5)
+		return false;
+	plmn->mcc = (d[0] - '0') * 100 + (d[1] - '0') * 10 + (d[2] - '0');
+	plmn->mnc = (d[3] - '0') * 10 + (d[4] - '0');
+	plmn->mnc_3_digits = false;
+	return plmn->mcc > 0;
+}
+
+static void fill_location(const struct vlr_subscr *vsub,
+			  char *mcc, size_t mccl, char *mnc, size_t mncl,
+			  char *lac, size_t lacl, char *ci, size_t cil,
+			  char *gai, size_t gail, char *mccmnc, size_t mccmnc_l)
+{
+	struct osmo_plmn_id plmn;
+	uint16_t lac_i = 0, ci_i = 0;
+
+	mcc[0] = mnc[0] = lac[0] = ci[0] = gai[0] = mccmnc[0] = '\0';
+	if (!vsub)
+		return;
+
+	memset(&plmn, 0, sizeof(plmn));
+	if (plmn_has_mcc(&vsub->cgi.lai.plmn))
+		plmn = vsub->cgi.lai.plmn;
+	else if (vsub->sgs.last_eutran_plmn_present &&
+		 plmn_has_mcc(&vsub->sgs.last_eutran_plmn))
+		plmn = vsub->sgs.last_eutran_plmn;
+	else if (plmn_has_mcc(&vsub->sgs.lai.plmn))
+		plmn = vsub->sgs.lai.plmn;
+	else if (!plmn_from_mme(vsub->sgs.mme_name, &plmn))
+		plmn_from_imsi(vsub->imsi, &plmn);
+
+	if (vsub->cgi.lai.lac)
+		lac_i = vsub->cgi.lai.lac;
+	else if (vsub->sgs.lai.lac)
+		lac_i = vsub->sgs.lai.lac;
+	if (vsub->cgi.cell_identity)
+		ci_i = vsub->cgi.cell_identity;
+
+	if (plmn.mcc) {
+		fmt_plmn(mcc, mccl, mnc, mncl, &plmn);
+		snprintf(mccmnc, mccmnc_l, "%s%s", mcc, mnc);
+	}
+	if (lac_i)
+		snprintf(lac, lacl, "%u", lac_i);
+	if (ci_i)
+		snprintf(ci, cil, "%u", ci_i);
+	if (mcc[0] && mnc[0])
+		snprintf(gai, gail, "%s-%s-%s-%s", mcc, mnc, lac, ci);
+}
+
+static int cdr_rotate_poll_sec(int rotate)
+{
+	return rotate == MSC_CDR_ROTATE_5MIN ? 15 : 60;
+}
+
+static bool cdr_period_elapsed(int rotate, time_t now, time_t anchor)
+{
+	struct tm tm_now, tm_prev;
+
+	if (rotate == MSC_CDR_ROTATE_5MIN)
+		return (now / 300) != (anchor / 300);
+
+	gmtime_r(&now, &tm_now);
+	gmtime_r(&anchor, &tm_prev);
+	if (rotate == MSC_CDR_ROTATE_HOURLY)
+		return tm_now.tm_year != tm_prev.tm_year
+		       || tm_now.tm_yday != tm_prev.tm_yday
+		       || tm_now.tm_hour != tm_prev.tm_hour;
+	return tm_now.tm_year != tm_prev.tm_year
+	       || tm_now.tm_yday != tm_prev.tm_yday;
+}
+
 static void cdr_maybe_rotate(struct gsm_network *net)
 {
 	time_t now;
-	struct tm tm_now, tm_prev;
+	struct tm tm_prev;
 	char dest[PATH_MAX];
-	bool changed = false;
 
 	if (!net->cdr.filename || net->cdr.rotate == MSC_CDR_ROTATE_NONE)
 		return;
@@ -238,24 +350,23 @@ static void cdr_maybe_rotate(struct gsm_network *net)
 		return;
 	}
 
-	gmtime_r(&now, &tm_now);
-	gmtime_r(&net->cdr.rotate_anchor, &tm_prev);
-
-	if (net->cdr.rotate == MSC_CDR_ROTATE_HOURLY)
-		changed = tm_now.tm_year != tm_prev.tm_year
-			  || tm_now.tm_yday != tm_prev.tm_yday
-			  || tm_now.tm_hour != tm_prev.tm_hour;
-	else
-		changed = tm_now.tm_year != tm_prev.tm_year
-			  || tm_now.tm_yday != tm_prev.tm_yday;
-
-	if (!changed)
+	if (!cdr_period_elapsed(net->cdr.rotate, now, net->cdr.rotate_anchor))
 		return;
 
-	snprintf(dest, sizeof(dest), "%s.%04d%02d%02d%02d",
-		 net->cdr.filename,
-		 tm_prev.tm_year + 1900, tm_prev.tm_mon + 1,
-		 tm_prev.tm_mday, tm_prev.tm_hour);
+	if (net->cdr.rotate == MSC_CDR_ROTATE_5MIN) {
+		time_t bucket = (net->cdr.rotate_anchor / 300) * 300;
+		gmtime_r(&bucket, &tm_prev);
+		snprintf(dest, sizeof(dest), "%s.%04d%02d%02d%02d%02d",
+			 net->cdr.filename,
+			 tm_prev.tm_year + 1900, tm_prev.tm_mon + 1,
+			 tm_prev.tm_mday, tm_prev.tm_hour, tm_prev.tm_min);
+	} else {
+		gmtime_r(&net->cdr.rotate_anchor, &tm_prev);
+		snprintf(dest, sizeof(dest), "%s.%04d%02d%02d%02d",
+			 net->cdr.filename,
+			 tm_prev.tm_year + 1900, tm_prev.tm_mon + 1,
+			 tm_prev.tm_mday, tm_prev.tm_hour);
+	}
 	if (rename(net->cdr.filename, dest) < 0) {
 		if (errno != ENOENT)
 			LOGP(DMSC, LOGL_ERROR, "CDR rotate rename %s -> %s failed: %s\n",
@@ -273,14 +384,16 @@ static void cdr_rotate_cb(void *data)
 
 	cdr_maybe_rotate(net);
 	if (net->cdr.rotate != MSC_CDR_ROTATE_NONE && net->cdr.filename)
-		osmo_timer_schedule(&net->cdr.rotate_timer, 60, 0);
+		osmo_timer_schedule(&net->cdr.rotate_timer,
+				    cdr_rotate_poll_sec(net->cdr.rotate), 0);
 }
 
 void msc_cdr_reconfigure(struct gsm_network *net)
 {
 	osmo_timer_del(&net->cdr.rotate_timer);
 	if (net->cdr.rotate != MSC_CDR_ROTATE_NONE && net->cdr.filename)
-		osmo_timer_schedule(&net->cdr.rotate_timer, 60, 0);
+		osmo_timer_schedule(&net->cdr.rotate_timer,
+				    cdr_rotate_poll_sec(net->cdr.rotate), 0);
 }
 
 void msc_cdr_init(struct gsm_network *net)
@@ -366,7 +479,9 @@ static void emit_row(struct gsm_network *net, struct vlr_subscr *vsub,
 	fmt_time(orig_t, sizeof(orig_t), t_origination);
 	fmt_time(deliv, sizeof(deliv), t_delivery);
 
-	mcc[0] = mnc[0] = lac[0] = ci[0] = gai[0] = mccmnc[0] = '\0';
+	fill_location(vsub, mcc, sizeof(mcc), mnc, sizeof(mnc),
+		      lac, sizeof(lac), ci, sizeof(ci),
+		      gai, sizeof(gai), mccmnc, sizeof(mccmnc));
 	if (vsub) {
 		if (vsub->imsi[0])
 			imsi = vsub->imsi;
@@ -378,22 +493,6 @@ static void emit_row(struct gsm_network *net, struct vlr_subscr *vsub,
 			msisdn = vsub->msisdn;
 		if (vsub->sgs.mme_name[0])
 			mme = vsub->sgs.mme_name;
-		if (vsub->cgi.lai.plmn.mcc)
-			snprintf(mcc, sizeof(mcc), "%03u", vsub->cgi.lai.plmn.mcc);
-		if (vsub->cgi.lai.plmn.mcc || vsub->cgi.lai.plmn.mnc) {
-			if (vsub->cgi.lai.plmn.mnc_3_digits)
-				snprintf(mnc, sizeof(mnc), "%03u", vsub->cgi.lai.plmn.mnc);
-			else
-				snprintf(mnc, sizeof(mnc), "%02u", vsub->cgi.lai.plmn.mnc);
-		}
-		if (vsub->cgi.lai.lac)
-			snprintf(lac, sizeof(lac), "%u", vsub->cgi.lai.lac);
-		if (vsub->cgi.cell_identity)
-			snprintf(ci, sizeof(ci), "%u", vsub->cgi.cell_identity);
-		if (mcc[0] && mnc[0]) {
-			snprintf(mccmnc, sizeof(mccmnc), "%s%s", mcc, mnc);
-			snprintf(gai, sizeof(gai), "%s-%s-%s-%s", mcc, mnc, lac, ci);
-		}
 	}
 
 	ran = ctx_ran(trans, msc_a, vsub);
@@ -502,7 +601,7 @@ static void emit_call(struct gsm_trans *trans, bool partial)
 		 rec_type, trans->cdr.sequence_number, partial ? 1 : 0,
 		 trans->cdr.calling, trans->cdr.called,
 		 trans->cdr.redirecting, trans->cdr.connected,
-		 "", "", "",
+		 trans->cdr.called, trans->cdr.calling, "",
 		 trans->cdr.t_setup, trans->cdr.t_setup, trans->cdr.t_alert,
 		 trans->cdr.t_answer, now_t,
 		 0, 0,
@@ -646,15 +745,14 @@ void msc_cdr_sms(struct gsm_trans *trans, struct gsm_sms *sms,
 
 	emit_row(net, trans->vsub, trans, trans->msc_a,
 		 rec_type, 0, 0,
-		 rec_type == MSC_CDR_MOSMS ? orig : orig,
-		 rec_type == MSC_CDR_MOSMS ? dest : dest,
+		 orig, dest,
 		 "", "",
-		 rec_type == MSC_CDR_MOSMS ? dest : "",
-		 rec_type == MSC_CDR_MTSMS ? orig : "",
+		 dest,
+		 orig,
 		 "",
 		 sms->created, sms->created, 0, 0, now_t,
 		 sms->created, now_t,
-		 sms->created ? (long)(now_t - sms->created) : 0, 0,
+		 0, 0,
 		 cft, diag,
 		 trans->callref,
 		 rec_type == MSC_CDR_MOSMS ? "SMSC" : incoming_route(ctx_ran(trans, NULL, trans->vsub)),

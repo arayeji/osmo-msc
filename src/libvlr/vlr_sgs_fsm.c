@@ -106,6 +106,7 @@ error:
 	 * per failed HLR send and melt the MME when GSUP was down. */
 	sgs_lu_response.accepted = false;
 	sgs_lu_response.error = false;
+	sgs_lu_response.cause = GSM48_REJECT_NETWORK_FAILURE;
 	sgs_lu_response.vsub = vsub;
 	vsub->sgs.response_cb(&sgs_lu_response);
 }

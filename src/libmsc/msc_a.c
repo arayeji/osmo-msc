@@ -1898,12 +1898,17 @@ int msc_a_ran_dec_from_msc_i(struct msc_a *msc_a, struct msc_a_ran_dec_data *d)
 				/* cipher disallowed */
 				LOG_MSC_A(msc_a, LOGL_ERROR, "Cipher Mode Complete: RNC chosen forbidden ciphering UEA%d\n",
 					  msg->cipher_mode_complete.utran_encryption);
-				vlr_subscr_rx_ciph_res(vsub, VLR_CIPH_REJECT);
+				if (vsub)
+					vlr_subscr_rx_ciph_res(vsub, VLR_CIPH_REJECT);
 				rc = 0;
 				break;
 			}
 		}
-		vlr_subscr_rx_ciph_res(vsub, VLR_CIPH_COMPL);
+		if (vsub)
+			vlr_subscr_rx_ciph_res(vsub, VLR_CIPH_COMPL);
+		else
+			LOG_MSC_A(msc_a, LOGL_NOTICE,
+				  "Cipher Mode Complete without VLR subscriber\n");
 		rc = 0;
 
 		/* Evaluate enclosed L3 message, typically Identity Response (IMEISV) */
@@ -1920,7 +1925,11 @@ int msc_a_ran_dec_from_msc_i(struct msc_a *msc_a, struct msc_a_ran_dec_data *d)
 		break;
 
 	case RAN_MSG_CIPHER_MODE_REJECT:
-		vlr_subscr_rx_ciph_res(vsub, VLR_CIPH_REJECT);
+		if (vsub)
+			vlr_subscr_rx_ciph_res(vsub, VLR_CIPH_REJECT);
+		else
+			LOG_MSC_A(msc_a, LOGL_NOTICE,
+				  "Cipher Mode Reject without VLR subscriber\n");
 		rc = 0;
 		break;
 

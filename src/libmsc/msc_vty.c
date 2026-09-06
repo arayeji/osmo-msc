@@ -778,13 +778,16 @@ DEFUN(cfg_msc_no_cdr_interval, cfg_msc_no_cdr_interval_cmd,
 }
 
 DEFUN(cfg_msc_cdr_rotate, cfg_msc_cdr_rotate_cmd,
-      "cdr rotate (hourly|daily)",
+      "cdr rotate (5min|hourly|daily)",
       "Call Detail Records for CS calls and SMS\n"
       "Rename the CDR file when the period ends so a collector can pick it up\n"
+      "Rotate every five UTC minutes\n"
       "Rotate at the start of each UTC hour\n"
       "Rotate at the start of each UTC day\n")
 {
-	if (!strcmp(argv[0], "hourly"))
+	if (!strcmp(argv[0], "5min"))
+		gsmnet->cdr.rotate = MSC_CDR_ROTATE_5MIN;
+	else if (!strcmp(argv[0], "hourly"))
 		gsmnet->cdr.rotate = MSC_CDR_ROTATE_HOURLY;
 	else
 		gsmnet->cdr.rotate = MSC_CDR_ROTATE_DAILY;
@@ -1025,7 +1028,9 @@ static int config_write_msc(struct vty *vty)
 		vty_out(vty, " cdr recording-entity %s%s", gsmnet->cdr.recording_entity, VTY_NEWLINE);
 	if (gsmnet->cdr.interval)
 		vty_out(vty, " cdr interval %u%s", gsmnet->cdr.interval, VTY_NEWLINE);
-	if (gsmnet->cdr.rotate == MSC_CDR_ROTATE_HOURLY)
+	if (gsmnet->cdr.rotate == MSC_CDR_ROTATE_5MIN)
+		vty_out(vty, " cdr rotate 5min%s", VTY_NEWLINE);
+	else if (gsmnet->cdr.rotate == MSC_CDR_ROTATE_HOURLY)
 		vty_out(vty, " cdr rotate hourly%s", VTY_NEWLINE);
 	else if (gsmnet->cdr.rotate == MSC_CDR_ROTATE_DAILY)
 		vty_out(vty, " cdr rotate daily%s", VTY_NEWLINE);

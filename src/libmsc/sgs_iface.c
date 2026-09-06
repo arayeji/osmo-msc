@@ -497,6 +497,20 @@ static int sgs_tx_status(struct sgs_connection *sgc, const char *imsi, enum sgsa
 	return 0;
 }
 
+/* The Reject Cause IE of SGsAP-LOCATION-UPDATE-REJECT carries the value part of
+ * the 3GPP TS 24.008 Reject cause IE (3GPP TS 29.118 9.4.13), *not* an SGs
+ * cause. Passing an enum sgsap_sgs_cause here made every HLR/GSUP failure reach
+ * the UE as MM/EMM cause #3 "Illegal MS" (SGSAP_SGS_CAUSE_IMSI_UNKNOWN == 3),
+ * which per 3GPP TS 24.008 4.4.4.7 / 3GPP TS 24.301 5.5.3.3.5 invalidates the
+ * (U)SIM for CS - and for a combined procedure also EPS - service until
+ * switch-off or UICC removal. A transient HLR outage must not do that. */
+static uint8_t sgs_lu_rej_cause(const struct sgs_lu_response *response)
+{
+	if (response->cause)
+		return response->cause;
+	return GSM48_REJECT_NETWORK_FAILURE;
+}
+
 /* Called by VLR via callback, transmits the location update response or
  * reject, depending on the outcome of the location update. */
 static void sgs_tx_loc_upd_resp_cb(struct sgs_lu_response *response)
@@ -525,7 +539,7 @@ static void sgs_tx_loc_upd_resp_cb(struct sgs_lu_response *response)
 	/* A single HLR/GSUP failure is not a VLR reset. Sending RESET-IND
 	 * here made the MME re-LU everyone; each fail RESET again (hang). */
 	if (response->error) {
-		resp = gsm29118_create_lu_rej(vsub->imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, &vsub->sgs.lai);
+		resp = gsm29118_create_lu_rej(vsub->imsi, sgs_lu_rej_cause(response), &vsub->sgs.lai);
 		if (mme->conn)
 			sgs_tx(mme->conn, resp);
 		else
@@ -555,7 +569,7 @@ static void sgs_tx_loc_upd_resp_cb(struct sgs_lu_response *response)
 		sgs_tx(mme->conn, resp);
 		vlr_sgs_loc_update_acc_sent(vsub);
 	} else {
-		resp = gsm29118_create_lu_rej(vsub->imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, &vsub->sgs.lai);
+		resp = gsm29118_create_lu_rej(vsub->imsi, sgs_lu_rej_cause(response), &vsub->sgs.lai);
 		sgs_tx(mme->conn, resp);
 		vlr_sgs_loc_update_rej_sent(vsub);
 	}
@@ -758,7 +772,7 @@ static int sgs_rx_loc_upd_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	struct osmo_plmn_id last_eutran_plmn_buf, *last_eutran_plmn = NULL;
 
 	if (!sgs_gsup_is_up()) {
-		resp = gsm29118_create_lu_rej(imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, NULL);
+		resp = gsm29118_create_lu_rej(imsi, GSM48_REJECT_NETWORK_FAILURE, NULL);
 		sgs_tx(sgc, resp);
 		return 0;
 	}
@@ -774,7 +788,7 @@ static int sgs_rx_loc_upd_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	/* Determine MME-Name */
 	mme_name = sgs_mme_fqdn_get(sgc);
 	if (!mme_name) {
-		resp = gsm29118_create_lu_rej(imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, NULL);
+		resp = gsm29118_create_lu_rej(imsi, GSM48_REJECT_NETWORK_FAILURE, NULL);
 		sgs_tx(sgc, resp);
 		return 0;
 	}
@@ -818,7 +832,7 @@ static int sgs_rx_loc_upd_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	rc = vlr_sgs_loc_update(gsm_network->vlr, &vlr_sgs_cfg, sgs_tx_loc_upd_resp_cb, sgs_iface_paging_cb,
 				sgs_tx_mm_info_cb, mme_name, type, imsi, &new_lai, last_eutran_plmn);
 	if (rc != 0) {
-		resp = gsm29118_create_lu_rej(imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN, NULL);
+		resp = gsm29118_create_lu_rej(imsi, GSM48_REJECT_NETWORK_FAILURE, NULL);
 		sgs_tx(sgc, resp);
 	}
 
