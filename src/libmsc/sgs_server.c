@@ -196,19 +196,19 @@ static int sgs_conn_closed_cb(struct osmo_stream_srv *conn)
 {
 	struct sgs_connection *sgc = osmo_stream_srv_get_data(conn);
 
+	if (!sgc)
+		return 0;
+
 	LOGSGC(sgc, LOGL_NOTICE, "Connection lost\n");
 	sgs_mme_detach_connection(sgc);
 	llist_del(&sgc->entry);
 	sgc->srv = NULL;
-	/* Allocated in sgs_accept_cb() as a child of the long-lived
-	 * osmo_stream_srv_link; after the llist_del() above it is unreachable.
-	 * Without this free, every closed SGs connection leaks a
-	 * struct sgs_connection for the lifetime of the process.
-	 * 'conn' is a talloc child of 'sgc' and the caller
-	 * (osmo_stream_srv_destroy) frees it right after this callback
-	 * returns, so re-parent it first to avoid a double free. */
-	talloc_steal(sgc->sgs, conn);
-	talloc_free(sgc);
+	osmo_stream_srv_set_data(conn, NULL);
+	/* Do not talloc_free(sgc) here. The caller still owns conn and
+	 * frees it after we return; readable_cb / sgs_iface may also
+	 * still hold sgc. Steal onto conn so sgc is released with the
+	 * stream object and cannot leak. */
+	talloc_steal(conn, sgc);
 	return 0;
 }
 
@@ -221,7 +221,9 @@ static int sgs_accept_cb(struct osmo_stream_srv_link *link, int fd)
 	sgc->sgs = sgs;
 	osmo_sock_get_name_buf(sgc->sockname, sizeof(sgc->sockname), fd);
 	sgs_close_replaced_peer_conns(sgs, fd);
-	sgc->srv = osmo_stream_srv_create(sgc, link, fd, sgs_conn_readable_cb, sgs_conn_closed_cb, sgc);
+	/* Parent conn on the long-lived sgs state, not on sgc. closed_cb
+	 * steals sgc under conn; a conn-child-of-sgc tree would cycle. */
+	sgc->srv = osmo_stream_srv_create(sgs, link, fd, sgs_conn_readable_cb, sgs_conn_closed_cb, sgc);
 	if (!sgc->srv) {
 		talloc_free(sgc);
 		return -1;
