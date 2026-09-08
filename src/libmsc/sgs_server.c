@@ -200,6 +200,15 @@ static int sgs_conn_closed_cb(struct osmo_stream_srv *conn)
 	sgs_mme_detach_connection(sgc);
 	llist_del(&sgc->entry);
 	sgc->srv = NULL;
+	/* Allocated in sgs_accept_cb() as a child of the long-lived
+	 * osmo_stream_srv_link; after the llist_del() above it is unreachable.
+	 * Without this free, every closed SGs connection leaks a
+	 * struct sgs_connection for the lifetime of the process.
+	 * 'conn' is a talloc child of 'sgc' and the caller
+	 * (osmo_stream_srv_destroy) frees it right after this callback
+	 * returns, so re-parent it first to avoid a double free. */
+	talloc_steal(sgc->sgs, conn);
+	talloc_free(sgc);
 	return 0;
 }
 
