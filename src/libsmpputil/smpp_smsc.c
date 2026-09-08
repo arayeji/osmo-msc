@@ -616,6 +616,10 @@ int smpp_tx_alert(struct smpp_esme *esme, uint8_t ton, uint8_t npi,
 	alert.sequence_number	= esme_inc_seq_nr(esme->esme);
 	alert.source_addr_ton 	= ton;
 	alert.source_addr_npi	= npi;
+	/* strlen(NULL) in snprintf("%s") is the libc@0x60 crash seen
+	 * when SGs SERVICE-REQUEST attach notifies ESMEs before MSISDN. */
+	if (!addr)
+		addr = "";
 	snprintf((char *)alert.source_addr, sizeof(alert.source_addr), "%s", addr);
 
 	tlv.tag = TLVID_ms_availability_status;

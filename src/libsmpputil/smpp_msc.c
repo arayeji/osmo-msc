@@ -337,6 +337,9 @@ static void alert_all_esme(struct smsc *smsc, struct vlr_subscr *vsub,
 {
 	struct smpp_esme *esme;
 
+	if (!smsc || !vsub)
+		return;
+
 	llist_for_each_entry(esme, &smsc->esme_list, list) {
 		/* we currently send an alert notification to each ESME that is
 		 * connected, and do not require a (non-existent) delivery
@@ -427,6 +430,9 @@ static int smpp_subscr_cb(unsigned int subsys, unsigned int signal,
 	struct vlr_subscr *vsub = signal_data;
 	struct smsc *smsc = handler_data;
 	uint8_t smpp_avail_status;
+
+	if (!vsub)
+		return 0;
 
 	/* determine the smpp_avail_status depending on attach/detach */
 	switch (signal) {

@@ -203,6 +203,9 @@ static void evaluate_acceptance_outcome(struct osmo_fsm_inst *fi, bool conn_acce
 
 	update_counters(fi, conn_accepted);
 
+	if (!vsub)
+		return;
+
 	if (conn_accepted) {
 		/* Record the Cell ID seen in Complete Layer 3 Information in the VLR, so that it also shows in vty
 		 * 'show' output. */
