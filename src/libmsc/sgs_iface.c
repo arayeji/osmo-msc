@@ -362,7 +362,7 @@ static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, 
 	/* Subscriber must be known by the VLR */
 	vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
 	if (!vsub) {
-		LOGSGC(sgc, LOGL_NOTICE, "SGsAP Message %s with unknown IMSI (%s), releasing\n",
+		LOGSGC(sgc, LOGL_DEBUG, "SGsAP Message %s with unknown IMSI (%s), releasing\n",
 		       sgsap_msg_type_name(msg_type), imsi);
 		resp = gsm29118_create_release_req(imsi, SGSAP_SGS_CAUSE_IMSI_UNKNOWN);
 		sgs_tx(sgc, resp);
@@ -371,7 +371,7 @@ static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, 
 
 	/* The SGs FSM must also be in SGs associated state */
 	if (vsub->sgs_fsm->state != SGS_UE_ST_ASSOCIATED) {
-		LOGSGC(sgc, LOGL_NOTICE, "(sub %s) SGsAP Message %s subscriber not SGs-associated, releasing\n",
+		LOGSGC(sgc, LOGL_DEBUG, "(sub %s) SGsAP Message %s subscriber not SGs-associated, releasing\n",
 		       vlr_subscr_name(vsub), sgsap_msg_type_name(msg_type));
 		resp = gsm29118_create_release_req(vsub->imsi, SGSAP_SGS_CAUSE_IMSI_DET_EPS_NONEPS);
 		sgs_tx(sgc, resp);

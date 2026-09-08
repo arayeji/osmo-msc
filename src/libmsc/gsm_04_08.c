@@ -1631,7 +1631,7 @@ static void msc_vlr_sgs_assoc_forget(const char *imsi)
 static void msc_vlr_subscr_update(struct vlr_subscr *subscr)
 {
 	struct msub *msub = msub_for_vsub(subscr);
-	LOG_MSUB(msub, LOGL_NOTICE, "VLR: update for IMSI=%s (MSISDN=%s)%s\n",
+	LOG_MSUB(msub, LOGL_DEBUG, "VLR: update for IMSI=%s (MSISDN=%s)%s\n",
 		 subscr->imsi, subscr->msisdn, msub ? "" : " (NO CONN!)");
 	msub_update_id(msub);
 	if (subscr->sgs.mme_name[0] && subscr->sgs_fsm
