@@ -904,9 +904,14 @@ struct gsm_sms *db_sms_get_unsent_for_subscr(struct vlr_subscr *vsub,
 {
 	OSMO_ASSERT(g_dbc);
 	sqlite3_stmt *stmt = g_dbc->stmt[DB_STMT_SMS_GET_UNSENT_FOR_SUBSCR];
-	struct gsm_network *net = vsub->vlr->user_ctx;
+	struct gsm_network *net;
 	struct gsm_sms *sms;
 	int rc;
+
+	if (!vsub || !vsub->vlr)
+		return NULL;
+
+	net = vsub->vlr->user_ctx;
 
 	if (!vsub->lu_complete)
 		return NULL;

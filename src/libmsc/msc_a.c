@@ -218,10 +218,12 @@ static void evaluate_acceptance_outcome(struct osmo_fsm_inst *fi, bool conn_acce
 			paging_response(msc_a);
 		else
 			paging_expired(vsub);
+		/* paging_response() can detach the vsub from this conn. */
+		vsub = msc_a_vsub(msc_a);
 	}
 
-	if (conn_accepted)
-		osmo_signal_dispatch(SS_SUBSCR, S_SUBSCR_ATTACHED, msc_a_vsub(msc_a));
+	if (conn_accepted && vsub)
+		osmo_signal_dispatch(SS_SUBSCR, S_SUBSCR_ATTACHED, vsub);
 
 	if (msc_a->complete_layer3_type == COMPLETE_LAYER3_LU)
 		msc_a_put_lu_deferred(msc_a);

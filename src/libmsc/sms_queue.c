@@ -537,6 +537,9 @@ static int sub_ready_for_sm(struct gsm_network *net, struct vlr_subscr *vsub)
 	struct gsm_sms *sms;
 	struct gsm_sms_pending *pending;
 
+	if (!net || !vsub || !vsub->vlr)
+		return 0;
+
 	/*
 	 * The code used to be very clever and tried to submit
 	 * a SMS during the Location Updating Request. This has
@@ -585,6 +588,8 @@ static int sms_subscr_cb(unsigned int subsys, unsigned int signal,
 	struct vlr_subscr *vsub = signal_data;
 
 	if (signal != S_SUBSCR_ATTACHED)
+		return 0;
+	if (!vsub)
 		return 0;
 
 	/* this is readyForSM */
