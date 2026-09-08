@@ -31,6 +31,7 @@
 #include <osmocom/core/utils.h>
 #include <osmocom/core/socket.h>
 #include <osmocom/core/select.h>
+#include <osmocom/core/timer.h>
 #include <osmocom/netif/stream.h>
 #include <netinet/sctp.h>
 
@@ -82,6 +83,24 @@ static bool sgs_fd_remote_ip(int fd, char *buf, size_t buflen)
 	return false;
 }
 
+static void sgs_conn_destroy_timer_cb(void *data)
+{
+	struct sgs_connection *sgc = data;
+
+	if (sgc && sgc->srv)
+		osmo_stream_srv_destroy(sgc->srv);
+}
+
+void sgs_conn_schedule_destroy(struct sgs_connection *sgc)
+{
+	if (!sgc || !sgc->srv)
+		return;
+	if (osmo_timer_pending(&sgc->destroy_timer))
+		return;
+	osmo_timer_setup(&sgc->destroy_timer, sgs_conn_destroy_timer_cb, sgc);
+	osmo_timer_schedule(&sgc->destroy_timer, 0, 0);
+}
+
 /* Reap leftover SGs sockets from the same peer. Do not touch an
  * MME-bound association: destroying mme->conn on every accept NULLed
  * the only TX path (LU Accept/Reject, paging) and the MME immediately
@@ -108,7 +127,7 @@ static void sgs_close_replaced_peer_conns(struct sgs_state *sgs, int new_fd,
 		if (fd == new_fd)
 			continue;
 		if (!sgs_fd_remote_ip(fd, old_ip, sizeof(old_ip))) {
-			osmo_stream_srv_destroy(sgc->srv);
+			sgs_conn_schedule_destroy(sgc);
 			closed++;
 			continue;
 		}
@@ -117,7 +136,7 @@ static void sgs_close_replaced_peer_conns(struct sgs_state *sgs, int new_fd,
 		/* Keep the association the MME is already using. */
 		if (sgc->mme)
 			continue;
-		osmo_stream_srv_destroy(sgc->srv);
+		sgs_conn_schedule_destroy(sgc);
 		closed++;
 	}
 	if (closed)
@@ -228,9 +247,13 @@ static int sgs_conn_closed_cb(struct osmo_stream_srv *conn)
 	if (!sgc)
 		return 0;
 
+	osmo_timer_del(&sgc->destroy_timer);
 	LOGSGC(sgc, LOGL_NOTICE, "Connection lost\n");
 	sgs_mme_detach_connection(sgc);
-	llist_del(&sgc->entry);
+	if (sgc->entry.next) {
+		llist_del(&sgc->entry);
+		INIT_LLIST_HEAD(&sgc->entry);
+	}
 	sgc->srv = NULL;
 	osmo_stream_srv_set_data(conn, NULL);
 	/* Do not talloc_free(sgc) here. The caller still owns conn and

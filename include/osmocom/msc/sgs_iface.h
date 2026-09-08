@@ -26,6 +26,7 @@
 #include <osmocom/vlr/vlr_sgs.h>
 #include <osmocom/msc/paging.h>
 #include <osmocom/core/socket.h>
+#include <osmocom/core/timer.h>
 
 struct msc_a;
 
@@ -60,6 +61,10 @@ struct sgs_connection {
 
 	/* represents the SCTP connection we accept()ed from this MME */
 	struct osmo_stream_srv *srv;
+
+	/* Destroy after the current select() turn so we do not free an
+	 * osmo_fd that is still queued in this poll iteration. */
+	struct osmo_timer_list destroy_timer;
 };
 
 struct sgs_mme_ctx {
@@ -86,6 +91,7 @@ extern struct sgs_state *g_sgs;
 struct sgs_state *sgs_iface_init(void *ctx, struct gsm_network *network);
 int sgs_iface_restore_assocs(struct gsm_network *network);
 void sgs_mme_detach_connection(struct sgs_connection *sgc);
+void sgs_conn_schedule_destroy(struct sgs_connection *sgc);
 int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg);
 enum sgsap_service_ind sgs_serv_ind_from_paging_cause(enum paging_cause);
 int sgs_iface_paging_cb(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind);

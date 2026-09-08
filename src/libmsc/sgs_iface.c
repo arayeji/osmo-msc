@@ -281,8 +281,7 @@ static int sgs_mme_fqdn_received(struct sgs_connection *sgc, const char *mme_fqd
 			       "Replacing stale SGs link %s with %s\n",
 			       stale->sockname, sgc->sockname);
 			sgs_mme_detach_connection(stale);
-			if (stale->srv)
-				osmo_stream_srv_destroy(stale->srv);
+			sgs_conn_schedule_destroy(stale);
 		}
 		mme->conn = sgc;
 		sgc->mme = mme;
@@ -300,8 +299,7 @@ static int sgs_mme_fqdn_received(struct sgs_connection *sgc, const char *mme_fqd
 				       "Adopting SGs link %s, closing stale link %s\n",
 				       sgc->sockname, stale->sockname);
 				sgs_mme_detach_connection(stale);
-				if (stale->srv)
-					osmo_stream_srv_destroy(stale->srv);
+				sgs_conn_schedule_destroy(stale);
 			}
 			mme->conn = sgc;
 			sgc->mme = mme;
