@@ -20,6 +20,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <string.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -54,6 +55,12 @@ static const char *sgs_sctp_assoc_chg_name(uint8_t state)
 	}
 }
 
+static void sgs_canon_ip(char *buf)
+{
+	if (!strncmp(buf, "::ffff:", 7))
+		memmove(buf, buf + 7, strlen(buf + 7) + 1);
+}
+
 static bool sgs_fd_remote_ip(int fd, char *buf, size_t buflen)
 {
 	struct sockaddr_storage ss;
@@ -61,22 +68,33 @@ static bool sgs_fd_remote_ip(int fd, char *buf, size_t buflen)
 
 	if (getpeername(fd, (struct sockaddr *)&ss, &slen) < 0)
 		return false;
-	if (ss.ss_family == AF_INET)
-		return inet_ntop(AF_INET, &((struct sockaddr_in *)&ss)->sin_addr, buf, buflen) != NULL;
-	if (ss.ss_family == AF_INET6)
-		return inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&ss)->sin6_addr, buf, buflen) != NULL;
+	if (ss.ss_family == AF_INET) {
+		if (!inet_ntop(AF_INET, &((struct sockaddr_in *)&ss)->sin_addr, buf, buflen))
+			return false;
+		return true;
+	}
+	if (ss.ss_family == AF_INET6) {
+		if (!inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&ss)->sin6_addr, buf, buflen))
+			return false;
+		sgs_canon_ip(buf);
+		return true;
+	}
 	return false;
 }
 
-/* Close every existing SGs SCTP from the same remote IP. After an MME restart
- * the kernel often keeps the old association ESTAB until heartbeat timeout while
- * the MME already opened a new one; paging would keep going out on the dead
- * link and the new socket's recv queue would never be the one mme->conn reads. */
-static void sgs_close_replaced_peer_conns(struct sgs_state *sgs, int new_fd)
+/* Reap leftover SGs sockets from the same peer. Do not touch an
+ * MME-bound association: destroying mme->conn on every accept NULLed
+ * the only TX path (LU Accept/Reject, paging) and the MME immediately
+ * opened another SCTP, which closed the next live link, and so on.
+ * The live link is replaced later in sgs_mme_fqdn_received() when the
+ * new socket presents the MME name (TS 29.118). */
+static void sgs_close_replaced_peer_conns(struct sgs_state *sgs, int new_fd,
+					  struct sgs_connection *new_sgc)
 {
 	struct sgs_connection *sgc, *tmp;
 	char new_ip[INET6_ADDRSTRLEN];
 	char old_ip[INET6_ADDRSTRLEN];
+	unsigned int closed = 0;
 
 	if (!sgs_fd_remote_ip(new_fd, new_ip, sizeof(new_ip)))
 		return;
@@ -84,17 +102,28 @@ static void sgs_close_replaced_peer_conns(struct sgs_state *sgs, int new_fd)
 	llist_for_each_entry_safe(sgc, tmp, &sgs->conn_list, entry) {
 		int fd;
 
-		if (!sgc->srv)
+		if (sgc == new_sgc || !sgc->srv)
 			continue;
 		fd = osmo_stream_srv_get_ofd(sgc->srv)->fd;
-		if (!sgs_fd_remote_ip(fd, old_ip, sizeof(old_ip)))
+		if (fd == new_fd)
 			continue;
+		if (!sgs_fd_remote_ip(fd, old_ip, sizeof(old_ip))) {
+			osmo_stream_srv_destroy(sgc->srv);
+			closed++;
+			continue;
+		}
 		if (strcmp(old_ip, new_ip) != 0)
 			continue;
-		LOGSGC(sgc, LOGL_NOTICE,
-		       "Closing SGs link replaced by a new connection from %s\n", new_ip);
+		/* Keep the association the MME is already using. */
+		if (sgc->mme)
+			continue;
 		osmo_stream_srv_destroy(sgc->srv);
+		closed++;
 	}
+	if (closed)
+		LOGP(DSGS, LOGL_NOTICE,
+		     "Closed %u unnamed/dead SGs link(s) from %s after a new accept\n",
+		     closed, new_ip);
 }
 
 /* Handle one SCTP notification. Returns -EBADF if the connection was destroyed. */
@@ -220,7 +249,6 @@ static int sgs_accept_cb(struct osmo_stream_srv_link *link, int fd)
 	OSMO_ASSERT(sgc);
 	sgc->sgs = sgs;
 	osmo_sock_get_name_buf(sgc->sockname, sizeof(sgc->sockname), fd);
-	sgs_close_replaced_peer_conns(sgs, fd);
 	/* Parent conn on the long-lived sgs state, not on sgc. closed_cb
 	 * steals sgc under conn; a conn-child-of-sgc tree would cycle. */
 	sgc->srv = osmo_stream_srv_create(sgs, link, fd, sgs_conn_readable_cb, sgs_conn_closed_cb, sgc);
@@ -233,6 +261,7 @@ static int sgs_accept_cb(struct osmo_stream_srv_link *link, int fd)
 		if (fl >= 0)
 			fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 	}
+	sgs_close_replaced_peer_conns(sgs, fd, sgc);
 	LOGSGC(sgc, LOGL_INFO, "Accepted new SGs connection\n");
 	llist_add_tail(&sgc->entry, &sgs->conn_list);
 
