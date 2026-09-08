@@ -1616,6 +1616,8 @@ int vlr_subscr_rx_rau_complete(struct vlr_subscr *vsub)
 bool vlr_subscr_expire(struct vlr_subscr *vsub)
 {
 	if (vsub->lu_complete) {
+		if (vsub->vlr->ops.sgs_assoc_forget && vsub->imsi[0])
+			vsub->vlr->ops.sgs_assoc_forget(vsub->imsi);
 		/* balancing the get from vlr_lu_compl_fsm_success() */
 		vsub->lu_complete = false;
 		vlr_subscr_put(vsub, VSUB_USE_ATTACHED);

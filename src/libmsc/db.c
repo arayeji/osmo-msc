@@ -42,6 +42,7 @@
 #include <osmocom/core/statistics.h>
 #include <osmocom/core/rate_ctr.h>
 #include <osmocom/core/utils.h>
+#include <osmocom/core/timer.h>
 
 enum stmt_idx {
 	DB_STMT_SMS_STORE,
@@ -55,6 +56,10 @@ enum stmt_idx {
 	DB_STMT_SMS_DEL_BY_ID,
 	DB_STMT_SMS_GET_VALID_UNTIL_BY_ID,
 	DB_STMT_SMS_GET_OLDEST_EXPIRED,
+	DB_STMT_SGS_ASSOC_UPSERT,
+	DB_STMT_SGS_ASSOC_DEL,
+	DB_STMT_SGS_ASSOC_DEL_MME,
+	DB_STMT_SGS_ASSOC_SEL,
 	_NUM_DB_STMT
 };
 
@@ -66,12 +71,14 @@ struct db_context {
 
 static struct db_context *g_dbc;
 
+static int db_run_statements(struct db_context *dbc, const char **statements, size_t statements_count);
+
 
 /***********************************************************************
  * DATABASE SCHEMA AND MIGRATION
  ***********************************************************************/
 
-#define SCHEMA_REVISION "6"
+#define SCHEMA_REVISION "7"
 
 enum {
 	SCHEMA_META,
@@ -87,6 +94,8 @@ enum {
 	SCHEMA_RATE,
 	SCHEMA_AUTHKEY,
 	SCHEMA_AUTHLAST,
+	SCHEMA_SGS_ASSOC,
+	SCHEMA_SGS_ASSOC_IDX,
 };
 
 static const char *create_stmts[] = {
@@ -202,6 +211,22 @@ static const char *create_stmts[] = {
 		"sres BLOB NOT NULL, "
 		"kc BLOB NOT NULL "
 		")",
+	[SCHEMA_SGS_ASSOC] = "CREATE TABLE IF NOT EXISTS SgsAssoc ("
+		"imsi TEXT PRIMARY KEY NOT NULL, "
+		"msisdn TEXT NOT NULL DEFAULT '', "
+		"tmsi INTEGER NOT NULL, "
+		"mme_name TEXT NOT NULL, "
+		"mcc INTEGER NOT NULL, "
+		"mnc INTEGER NOT NULL, "
+		"mnc_3_digits INTEGER NOT NULL DEFAULT 0, "
+		"lac INTEGER NOT NULL, "
+		"eutran_present INTEGER NOT NULL DEFAULT 0, "
+		"eutran_mcc INTEGER NOT NULL DEFAULT 0, "
+		"eutran_mnc INTEGER NOT NULL DEFAULT 0, "
+		"eutran_mnc_3_digits INTEGER NOT NULL DEFAULT 0, "
+		"expire_unix INTEGER NOT NULL DEFAULT 0"
+		")",
+	[SCHEMA_SGS_ASSOC_IDX] = "CREATE INDEX IF NOT EXISTS SgsAssoc_mme ON SgsAssoc(mme_name)",
 };
 
 /***********************************************************************
@@ -303,6 +328,21 @@ static const char *stmt_sql[] = {
 		"SELECT strftime('%s', valid_until) FROM SMS WHERE id = $id",
 	[DB_STMT_SMS_GET_OLDEST_EXPIRED] =
 		"SELECT id, strftime('%s', valid_until) FROM SMS ORDER BY valid_until LIMIT 1",
+	[DB_STMT_SGS_ASSOC_UPSERT] =
+		"INSERT OR REPLACE INTO SgsAssoc "
+		"(imsi, msisdn, tmsi, mme_name, mcc, mnc, mnc_3_digits, lac, "
+		" eutran_present, eutran_mcc, eutran_mnc, eutran_mnc_3_digits, expire_unix) "
+		"VALUES "
+		"($imsi, $msisdn, $tmsi, $mme_name, $mcc, $mnc, $mnc_3_digits, $lac, "
+		" $eutran_present, $eutran_mcc, $eutran_mnc, $eutran_mnc_3_digits, $expire_unix)",
+	[DB_STMT_SGS_ASSOC_DEL] =
+		"DELETE FROM SgsAssoc WHERE imsi = $imsi",
+	[DB_STMT_SGS_ASSOC_DEL_MME] =
+		"DELETE FROM SgsAssoc WHERE mme_name = $mme_name",
+	[DB_STMT_SGS_ASSOC_SEL] =
+		"SELECT imsi, msisdn, tmsi, mme_name, mcc, mnc, mnc_3_digits, lac, "
+		" eutran_present, eutran_mcc, eutran_mnc, eutran_mnc_3_digits, expire_unix "
+		"FROM SgsAssoc",
 };
 
 /***********************************************************************
@@ -476,7 +516,7 @@ static int check_db_revision(struct db_context *dbc)
 	case 4:
 		LOGP(DDB, LOGL_FATAL, "You must use osmo-msc 1.1.0 to 1.8.0 to upgrade database "
 		     "schema from '%u' to '5', sorry\n", db_rev);
-		break;
+		return -1;
 	case 5:
 		LOGP(DDB, LOGL_FATAL, "The storage format of BINARY data in the database "
 		     "has changed. In order to deliver any pending SMS in your database, "
@@ -484,7 +524,31 @@ static int check_db_revision(struct db_context *dbc)
 		     "'%u' to '6'. Alternatively you can use a fresh, blank database "
 		     "with this version of osmo-msc, sorry.\n", db_rev);
 		return -1;
-		break;
+	case 6: {
+		static const char *mig6[] = {
+			"CREATE TABLE IF NOT EXISTS SgsAssoc ("
+			"imsi TEXT PRIMARY KEY NOT NULL, "
+			"msisdn TEXT NOT NULL DEFAULT '', "
+			"tmsi INTEGER NOT NULL, "
+			"mme_name TEXT NOT NULL, "
+			"mcc INTEGER NOT NULL, "
+			"mnc INTEGER NOT NULL, "
+			"mnc_3_digits INTEGER NOT NULL DEFAULT 0, "
+			"lac INTEGER NOT NULL, "
+			"eutran_present INTEGER NOT NULL DEFAULT 0, "
+			"eutran_mcc INTEGER NOT NULL DEFAULT 0, "
+			"eutran_mnc INTEGER NOT NULL DEFAULT 0, "
+			"eutran_mnc_3_digits INTEGER NOT NULL DEFAULT 0, "
+			"expire_unix INTEGER NOT NULL DEFAULT 0"
+			")",
+			"CREATE INDEX IF NOT EXISTS SgsAssoc_mme ON SgsAssoc(mme_name)",
+			"UPDATE Meta SET value = '7' WHERE key = 'revision'",
+		};
+		if (db_run_statements(dbc, mig6, ARRAY_SIZE(mig6)) < 0)
+			return -EINVAL;
+		LOGP(DDB, LOGL_NOTICE, "Migrated database schema from 6 to 7 (SgsAssoc)\n");
+		return 0;
+	}
 	default:
 		LOGP(DDB, LOGL_FATAL, "Invalid database schema revision '%d'.\n", db_rev);
 		return -EINVAL;
@@ -1046,4 +1110,142 @@ void db_sms_delete_oldest_expired_message(void)
 	}
 
 	db_remove_reset(stmt);
+}
+
+static time_t sgs_assoc_expire_unix(const struct vlr_subscr *vsub)
+{
+	struct timespec mono;
+	time_t remaining;
+
+	if (!vsub || vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION)
+		return 0;
+	if (osmo_clock_gettime(CLOCK_MONOTONIC, &mono) != 0)
+		return 0;
+	remaining = (time_t)vsub->expire_lu - (time_t)mono.tv_sec;
+	if (remaining <= 0)
+		return time(NULL);
+	return time(NULL) + remaining;
+}
+
+int db_sgs_assoc_upsert(const struct vlr_subscr *vsub)
+{
+	sqlite3_stmt *stmt;
+	int rc;
+
+	if (!g_dbc || !vsub || !vsub->imsi[0] || !vsub->sgs.mme_name[0])
+		return 0;
+
+	stmt = g_dbc->stmt[DB_STMT_SGS_ASSOC_UPSERT];
+	db_bind_text(stmt, "$imsi", vsub->imsi);
+	db_bind_text(stmt, "$msisdn", vsub->msisdn);
+	db_bind_int64(stmt, "$tmsi", (int64_t)vsub->tmsi);
+	db_bind_text(stmt, "$mme_name", vsub->sgs.mme_name);
+	db_bind_int(stmt, "$mcc", vsub->sgs.lai.plmn.mcc);
+	db_bind_int(stmt, "$mnc", vsub->sgs.lai.plmn.mnc);
+	db_bind_int(stmt, "$mnc_3_digits", vsub->sgs.lai.plmn.mnc_3_digits ? 1 : 0);
+	db_bind_int(stmt, "$lac", vsub->sgs.lai.lac);
+	db_bind_int(stmt, "$eutran_present", vsub->sgs.last_eutran_plmn_present ? 1 : 0);
+	db_bind_int(stmt, "$eutran_mcc", vsub->sgs.last_eutran_plmn.mcc);
+	db_bind_int(stmt, "$eutran_mnc", vsub->sgs.last_eutran_plmn.mnc);
+	db_bind_int(stmt, "$eutran_mnc_3_digits", vsub->sgs.last_eutran_plmn.mnc_3_digits ? 1 : 0);
+	db_bind_int64(stmt, "$expire_unix", (int64_t)sgs_assoc_expire_unix(vsub));
+
+	rc = sqlite3_step(stmt);
+	db_remove_reset(stmt);
+	if (rc != SQLITE_DONE) {
+		LOGP(DDB, LOGL_ERROR, "Failed to persist SGs association: (%d) %s\n",
+		     rc, sqlite3_errmsg(g_dbc->db));
+		return -1;
+	}
+	return 0;
+}
+
+int db_sgs_assoc_delete(const char *imsi)
+{
+	sqlite3_stmt *stmt;
+	int rc;
+
+	if (!g_dbc || !imsi || !imsi[0])
+		return 0;
+
+	stmt = g_dbc->stmt[DB_STMT_SGS_ASSOC_DEL];
+	db_bind_text(stmt, "$imsi", imsi);
+	rc = sqlite3_step(stmt);
+	db_remove_reset(stmt);
+	if (rc != SQLITE_DONE) {
+		LOGP(DDB, LOGL_ERROR, "Failed to delete SGs association: (%d) %s\n",
+		     rc, sqlite3_errmsg(g_dbc->db));
+		return -1;
+	}
+	return 0;
+}
+
+int db_sgs_assoc_delete_mme(const char *mme_name)
+{
+	sqlite3_stmt *stmt;
+	int rc;
+
+	if (!g_dbc || !mme_name || !mme_name[0])
+		return 0;
+
+	stmt = g_dbc->stmt[DB_STMT_SGS_ASSOC_DEL_MME];
+	db_bind_text(stmt, "$mme_name", mme_name);
+	rc = sqlite3_step(stmt);
+	db_remove_reset(stmt);
+	if (rc != SQLITE_DONE) {
+		LOGP(DDB, LOGL_ERROR, "Failed to delete SGs associations for MME: (%d) %s\n",
+		     rc, sqlite3_errmsg(g_dbc->db));
+		return -1;
+	}
+	return 0;
+}
+
+int db_sgs_assoc_foreach(db_sgs_assoc_cb_t cb, void *data)
+{
+	sqlite3_stmt *stmt;
+	int rc;
+	int n = 0;
+
+	if (!g_dbc || !cb)
+		return 0;
+
+	stmt = g_dbc->stmt[DB_STMT_SGS_ASSOC_SEL];
+	while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+		struct db_sgs_assoc row;
+		const char *imsi, *msisdn, *mme_name;
+
+		memset(&row, 0, sizeof(row));
+		imsi = (const char *)sqlite3_column_text(stmt, 0);
+		msisdn = (const char *)sqlite3_column_text(stmt, 1);
+		mme_name = (const char *)sqlite3_column_text(stmt, 3);
+		if (!imsi || !imsi[0] || !mme_name || !mme_name[0])
+			continue;
+		OSMO_STRLCPY_ARRAY(row.imsi, imsi);
+		if (msisdn)
+			OSMO_STRLCPY_ARRAY(row.msisdn, msisdn);
+		row.tmsi = (uint32_t)sqlite3_column_int64(stmt, 2);
+		OSMO_STRLCPY_ARRAY(row.mme_name, mme_name);
+		row.lai.plmn.mcc = sqlite3_column_int(stmt, 4);
+		row.lai.plmn.mnc = sqlite3_column_int(stmt, 5);
+		row.lai.plmn.mnc_3_digits = sqlite3_column_int(stmt, 6) != 0;
+		row.lai.lac = sqlite3_column_int(stmt, 7);
+		row.last_eutran_plmn_present = sqlite3_column_int(stmt, 8) != 0;
+		row.last_eutran_plmn.mcc = sqlite3_column_int(stmt, 9);
+		row.last_eutran_plmn.mnc = sqlite3_column_int(stmt, 10);
+		row.last_eutran_plmn.mnc_3_digits = sqlite3_column_int(stmt, 11) != 0;
+		row.expire_unix = (time_t)sqlite3_column_int64(stmt, 12);
+
+		if (cb(data, &row) < 0) {
+			db_remove_reset(stmt);
+			return -1;
+		}
+		n++;
+	}
+	db_remove_reset(stmt);
+	if (rc != SQLITE_DONE) {
+		LOGP(DDB, LOGL_ERROR, "Failed to load SGs associations: (%d) %s\n",
+		     rc, sqlite3_errmsg(g_dbc->db));
+		return -1;
+	}
+	return n;
 }

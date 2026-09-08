@@ -153,6 +153,9 @@ void vlr_sgs_loc_update_acc_sent(struct vlr_subscr *vsub)
 {
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_TX_LU_ACCEPT, NULL);
 
+	if (vsub->vlr->ops.sgs_assoc_persist)
+		vsub->vlr->ops.sgs_assoc_persist(vsub);
+
 	/* Balance vlr_subscr_find_or_create_by_imsi() in vlr_sgs_loc_update() */
 	vlr_subscr_put(vsub, VSUB_USE_SGS_LU);
 
@@ -255,6 +258,9 @@ void vlr_sgs_eps_detach(struct vlr_instance *vlr, const char *imsi, enum sgsap_i
 	 * expiration timer is running. */
 	if (vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION)
 		vlr_subscr_enable_expire_lu(vsub);
+
+	if (vlr->ops.sgs_assoc_forget)
+		vlr->ops.sgs_assoc_forget(imsi);
 
 	vlr_subscr_put(vsub, __func__);
 }

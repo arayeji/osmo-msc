@@ -38,6 +38,7 @@
 #include <osmocom/msc/gsm_subscriber.h>
 #include <osmocom/msc/signal.h>
 #include <osmocom/vlr/vlr.h>
+#include <osmocom/msc/sgs_iface.h>
 
 #include <osmocom/core/talloc.h>
 #include <osmocom/core/utils.h>
@@ -514,6 +515,9 @@ int sms_queue_start(struct gsm_network *network)
 		LOGP(DMSC, LOGL_FATAL, "DB: Failed to prepare database.\n");
 		return -1;
 	}
+
+	/* 23.007 / 29.118: reload SGs associations before the MME connects. */
+	sgs_iface_restore_assocs(network);
 
 	sms_submit_pending(sms);
 

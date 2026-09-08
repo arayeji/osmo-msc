@@ -265,6 +265,10 @@ struct vlr_ops {
 	int (*subscr_assoc)(void *msc_conn_ref, struct vlr_subscr *vsub);
 	/* notify MSC that the given subscriber is no longer valid. */
 	void (*subscr_inval)(void *msc_conn_ref, struct vlr_subscr *vsub, enum vlr_inval_reason reason);
+	/* optional: persist SGs association for VLR restoration (23.007 / 29.118) */
+	void (*sgs_assoc_persist)(struct vlr_subscr *vsub);
+	/* optional: drop persisted SGs association (detach / expire / HLR cancel) */
+	void (*sgs_assoc_forget)(const char *imsi);
 };
 
 /* An instance of the VLR codebase */

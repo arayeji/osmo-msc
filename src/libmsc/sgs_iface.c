@@ -20,11 +20,15 @@
  *
  */
 
+#include <errno.h>
+#include <time.h>
+
 #include <osmocom/core/utils.h>
 #include <osmocom/core/msgb.h>
 #include <osmocom/core/fsm.h>
 #include <osmocom/core/socket.h>
 #include <osmocom/core/select.h>
+#include <osmocom/core/timer.h>
 
 #include <osmocom/gsm/tlv.h>
 #include <osmocom/gsm/gsm48.h>
@@ -47,6 +51,7 @@
 #include <osmocom/msc/msc_api.h>
 #include <osmocom/msc/sgs_iface.h>
 #include <osmocom/msc/sgs_server.h>
+#include <osmocom/msc/db.h>
 #include <osmocom/gsm/protocol/gsm_29_118.h>
 
 #include <osmocom/gsm/apn.h>
@@ -634,7 +639,8 @@ int sgs_iface_paging_cb(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind
 		return 0;
 	}
 
-	/* See also: 3GPP TS 29.118, chapter 5.1.2.2 Paging Initiation */
+	/* 3GPP TS 29.118 5.1.2.2: page from ASSOCIATED, LA-UPDATE-PRESENT,
+	 * or SGs-NULL while Confirmed by Radio Contact is false (VLR restart). */
 	if (vsub->sgs_fsm->state == SGS_UE_ST_NULL && vsub->conf_by_radio_contact_ind == true) {
 		LOGPFSMSL(vsub->sgs_fsm, DPAG, LOGL_ERROR, "Will not Page (conf_by_radio_contact_ind == true)\n");
 		return -EINVAL;
@@ -738,10 +744,12 @@ static int sgs_rx_reset_ind(struct sgs_connection *sgc, struct msgb *msg, const 
 
 	resp = gsm29118_create_reset_ack(&reset_params);
 
-	/* MME failure (29.118 5.8): drop SGs assoc for this MME only */
-	if (sgc->mme)
+	/* MME failure (29.118 5.8): drop SGs assoc for this MME only.
+	 * The MME lost its associations, so persisted rows cannot page. */
+	if (sgc->mme) {
+		db_sgs_assoc_delete_mme(sgc->mme->fqdn);
 		vlr_sgs_reset_mme(gsm_network->vlr, sgc->mme->fqdn);
-	else
+	} else
 		vlr_sgs_reset(gsm_network->vlr);
 
 	sgs_tx(sgc, resp);
@@ -1375,7 +1383,9 @@ static void sgs_vlr_reset_fsm_allstate(struct osmo_fsm_inst *fi, uint32_t event,
 		reset_ind = gsm29118_create_reset_ind(&reset_params);
 		sgs_tx(sgc, reset_ind);
 
-		/* VLR restart toward this MME only (do not wipe other MMEs) */
+		/* VLR restart toward this MME only (do not wipe other MMEs).
+		 * Keep SgsAssoc rows so 29.118 5.1.2.2 can page from SGs-NULL
+		 * while Confirmed by Radio Contact is false. */
 		vlr_sgs_reset_mme(gsm_network->vlr, mme->fqdn);
 
 		osmo_fsm_inst_state_chg(fi, SGS_VLRR_ST_WAIT_ACK, sgs->cfg.timer[SGS_STATE_TS11], 11);
@@ -1532,6 +1542,83 @@ void sgs_iface_tx_serv_abrt(struct vlr_subscr *vsub)
  *  \param[in] ctx talloc context
  *  \param[in] network associated gsm network
  *  \returns returns allocated sgs_stae, NULL in case of error. */
+static int sgs_restore_one(void *data, const struct db_sgs_assoc *row)
+{
+	struct gsm_network *net = data;
+	struct vlr_subscr *vsub;
+	struct timespec mono;
+	time_t now = time(NULL);
+
+	if (row->expire_unix > 0 && row->expire_unix <= now) {
+		db_sgs_assoc_delete(row->imsi);
+		return 0;
+	}
+
+	vsub = vlr_subscr_find_or_create_by_imsi(net->vlr, row->imsi, VSUB_USE_ATTACHED, NULL);
+	if (!vsub)
+		return -ENOMEM;
+
+	if (row->msisdn[0])
+		vlr_subscr_set_msisdn(vsub, row->msisdn);
+	if (row->tmsi != GSM_RESERVED_TMSI) {
+		vsub->tmsi = row->tmsi;
+		vlr_subscr_rehash_tmsi(vsub);
+	}
+	OSMO_STRLCPY_ARRAY(vsub->sgs.mme_name, row->mme_name);
+	vsub->sgs.lai = row->lai;
+	vsub->cgi.lai = row->lai;
+	vsub->cs.lac = row->lai.lac;
+	if (row->last_eutran_plmn_present)
+		vlr_subscr_set_last_used_eutran_plmn_id(vsub, &row->last_eutran_plmn);
+	else
+		vlr_subscr_set_last_used_eutran_plmn_id(vsub, NULL);
+
+	if (g_sgs) {
+		memcpy(vsub->sgs.cfg.timer, g_sgs->cfg.timer, sizeof(vsub->sgs.cfg.timer));
+		memcpy(vsub->sgs.cfg.counter, g_sgs->cfg.counter, sizeof(vsub->sgs.cfg.counter));
+	}
+	vsub->sgs.paging_cb = sgs_iface_paging_cb;
+	vsub->sgs.mminfo_cb = sgs_tx_mm_info_cb;
+	vsub->sgs.response_cb = sgs_tx_loc_upd_resp_cb;
+
+	vsub->cs.attached_via_ran = OSMO_RAT_EUTRAN_SGS;
+	vsub->conf_by_radio_contact_ind = false;
+	vsub->sub_dataconf_by_hlr_ind = false;
+	vsub->loc_conf_in_hlr_ind = false;
+	vsub->lu_complete = true;
+	vsub->imsi_detached_flag = false;
+
+	if (row->expire_unix > 0 && osmo_clock_gettime(CLOCK_MONOTONIC, &mono) == 0)
+		vsub->expire_lu = mono.tv_sec + (row->expire_unix - now);
+	else
+		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+
+	/* SGs-NULL + unconfirmed: 29.118 5.7.2.1 / 5.1.2.2 */
+	osmo_fsm_inst_state_chg(vsub->sgs_fsm, SGS_UE_ST_NULL, 0, 0);
+
+	LOGP(DSGS, LOGL_DEBUG, "Restored SGs association IMSI=%s MME=%s (unconfirmed, SGs-NULL)\n",
+	     vsub->imsi, vsub->sgs.mme_name);
+	return 0;
+}
+
+int sgs_iface_restore_assocs(struct gsm_network *network)
+{
+	int n;
+
+	if (!network || !network->vlr)
+		return 0;
+
+	n = db_sgs_assoc_foreach(sgs_restore_one, network);
+	if (n < 0) {
+		LOGP(DSGS, LOGL_ERROR, "Failed to restore SGs associations from database\n");
+		return n;
+	}
+	if (n)
+		LOGP(DSGS, LOGL_NOTICE,
+		     "VLR restoration: loaded %d SGs association(s) (TS 23.007 / 29.118 5.1.2.2)\n", n);
+	return 0;
+}
+
 struct sgs_state *sgs_iface_init(void *ctx, struct gsm_network *network)
 {
 	struct sgs_state *sgs;

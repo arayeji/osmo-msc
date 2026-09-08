@@ -40,7 +40,9 @@
 #include <osmocom/msc/signal.h>
 #include <osmocom/msc/transaction.h>
 #include <osmocom/vlr/vlr.h>
+#include <osmocom/vlr/vlr_sgs.h>
 #include <osmocom/msc/msc_a.h>
+#include <osmocom/msc/db.h>
 
 #include <osmocom/gsm/gsm48.h>
 #include <osmocom/gsm/gsm_utils.h>
@@ -1615,6 +1617,16 @@ static int msc_vlr_tx_cm_serv_rej(void *msc_conn_ref, enum osmo_cm_service_type 
 	return 0;
 }
 
+static void msc_vlr_sgs_assoc_persist(struct vlr_subscr *vsub)
+{
+	db_sgs_assoc_upsert(vsub);
+}
+
+static void msc_vlr_sgs_assoc_forget(const char *imsi)
+{
+	db_sgs_assoc_delete(imsi);
+}
+
 /* VLR informs us that the subscriber data has somehow been modified */
 static void msc_vlr_subscr_update(struct vlr_subscr *subscr)
 {
@@ -1622,6 +1634,9 @@ static void msc_vlr_subscr_update(struct vlr_subscr *subscr)
 	LOG_MSUB(msub, LOGL_NOTICE, "VLR: update for IMSI=%s (MSISDN=%s)%s\n",
 		 subscr->imsi, subscr->msisdn, msub ? "" : " (NO CONN!)");
 	msub_update_id(msub);
+	if (subscr->sgs.mme_name[0] && subscr->sgs_fsm
+	    && subscr->sgs_fsm->state == SGS_UE_ST_ASSOCIATED)
+		db_sgs_assoc_upsert(subscr);
 }
 
 /* VLR informs us that the subscriber has been associated with a conn.
@@ -1697,6 +1712,8 @@ const struct vlr_ops msc_vlr_ops = {
 	.subscr_update = msc_vlr_subscr_update,
 	.subscr_assoc = msc_vlr_subscr_assoc,
 	.subscr_inval = msc_vlr_subscr_inval,
+	.sgs_assoc_persist = msc_vlr_sgs_assoc_persist,
+	.sgs_assoc_forget = msc_vlr_sgs_assoc_forget,
 };
 
 struct msgb *gsm48_create_mm_serv_rej(enum gsm48_reject_value value)

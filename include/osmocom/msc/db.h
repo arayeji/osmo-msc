@@ -22,6 +22,10 @@
 #define _DB_H
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+
+#include <osmocom/gsm/gsm23003.h>
 
 #include "gsm_subscriber.h"
 
@@ -29,6 +33,25 @@
 
 struct gsm_network;
 struct gsm_sms;
+struct vlr_instance;
+struct vlr_subscr;
+struct osmo_location_area_id;
+struct osmo_plmn_id;
+
+/* SGs association row used for 3GPP TS 23.007 / 29.118 VLR restoration */
+struct db_sgs_assoc {
+	char imsi[GSM23003_IMSI_MAX_DIGITS + 1];
+	char msisdn[GSM23003_MSISDN_MAX_DIGITS + 1];
+	uint32_t tmsi;
+	char mme_name[256];
+	struct osmo_location_area_id lai;
+	bool last_eutran_plmn_present;
+	struct osmo_plmn_id last_eutran_plmn;
+	/* 0 = never expire; else CLOCK_REALTIME seconds */
+	time_t expire_unix;
+};
+
+typedef int (*db_sgs_assoc_cb_t)(void *data, const struct db_sgs_assoc *row);
 
 /* one time initialisation */
 int db_init(void *ctx, const char *fname, bool enable_sqlite_logging);
@@ -52,5 +75,11 @@ int db_sms_delete_by_msisdn(const char *msisdn);
 int db_sms_delete_message_by_id(unsigned long long sms_id);
 int db_sms_delete_expired_message_by_id(unsigned long long sms_id);
 void db_sms_delete_oldest_expired_message(void);
+
+/* SGs VLR restoration (TS 23.007 / 29.118 5.1.2.2) */
+int db_sgs_assoc_upsert(const struct vlr_subscr *vsub);
+int db_sgs_assoc_delete(const char *imsi);
+int db_sgs_assoc_delete_mme(const char *mme_name);
+int db_sgs_assoc_foreach(db_sgs_assoc_cb_t cb, void *data);
 
 #endif /* _DB_H */
