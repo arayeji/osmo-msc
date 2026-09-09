@@ -2,6 +2,7 @@
 #define _GSM_DATA_H
 
 #include <stdint.h>
+#include <stdio.h>
 #include <regex.h>
 #include <sys/types.h>
 #include <stdbool.h>
@@ -320,6 +321,13 @@ struct gsm_network {
 		struct osmo_timer_list rotate_timer;
 		uint64_t next_record_number;
 		time_t rotate_anchor;
+		/* Held open across records. Reopening per record cost an
+		 * open/flush/close round trip inside the main loop, which at
+		 * production LU rates stopped osmo-msc draining the SGsAP
+		 * socket (rcvbuf full, a_rwnd 0, MME flow-controlled).
+		 * Closed on rotation and on reconfigure; NULL means "not open
+		 * yet", not "disabled" - cdr.filename decides that. */
+		FILE *fh;
 	} cdr;
 };
 

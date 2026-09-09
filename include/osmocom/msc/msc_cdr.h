@@ -28,6 +28,8 @@ enum msc_cdr_rotate {
 
 void msc_cdr_init(struct gsm_network *net);
 void msc_cdr_reconfigure(struct gsm_network *net);
+/* Release the held-open CDR file handle; the next record reopens it. */
+void msc_cdr_close_file(struct gsm_network *net);
 
 void msc_cdr_note_setup(struct gsm_trans *trans, const struct gsm_mncc *setup);
 void msc_cdr_note_connected(struct gsm_trans *trans, const char *number);

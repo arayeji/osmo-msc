@@ -375,6 +375,11 @@ static void cdr_maybe_rotate(struct gsm_network *net)
 		LOGP(DMSC, LOGL_NOTICE, "CDR rotated to %s\n", dest);
 	}
 
+	/* Our descriptor now points at the renamed file. Drop it so the next
+	 * record opens the new one; without this every later record would keep
+	 * appending to the already-rotated file. */
+	msc_cdr_close_file(net);
+
 	net->cdr.rotate_anchor = now;
 }
 
@@ -390,6 +395,9 @@ static void cdr_rotate_cb(void *data)
 
 void msc_cdr_reconfigure(struct gsm_network *net)
 {
+	/* cdr.filename may now point elsewhere, or CDR may have been turned
+	 * off entirely. Either way the open handle is stale. */
+	msc_cdr_close_file(net);
 	osmo_timer_del(&net->cdr.rotate_timer);
 	if (net->cdr.rotate != MSC_CDR_ROTATE_NONE && net->cdr.filename)
 		osmo_timer_schedule(&net->cdr.rotate_timer,
@@ -409,6 +417,39 @@ static void maybe_print_header(FILE *f)
 	fputs(cdr_header, f);
 }
 
+/* Open the CDR file if it is not open yet. The handle is deliberately kept
+ * across records: fopen()+fclose() per record put a path lookup, an inode
+ * update and a flush in the main loop on every LU, which at production rates
+ * starved the SGsAP socket until its receive buffer filled and osmo-msc
+ * advertised a zero window to the MME. */
+static FILE *cdr_file(struct gsm_network *net)
+{
+	if (net->cdr.fh)
+		return net->cdr.fh;
+
+	net->cdr.fh = fopen(net->cdr.filename, "a");
+	if (!net->cdr.fh) {
+		LOGP(DMSC, LOGL_ERROR, "Failed to open CDR file %s: %s\n",
+		     net->cdr.filename, strerror(errno));
+		return NULL;
+	}
+	/* Only meaningful straight after opening, while the offset still
+	 * reflects the size of the file we just attached to. */
+	maybe_print_header(net->cdr.fh);
+	return net->cdr.fh;
+}
+
+/* Drop the handle so the next record reopens. Call after anything that makes
+ * the open descriptor stale: rotation renames the file out from under us, and
+ * a VTY reconfigure may point cdr.filename somewhere else. */
+void msc_cdr_close_file(struct gsm_network *net)
+{
+	if (!net->cdr.fh)
+		return;
+	fclose(net->cdr.fh);
+	net->cdr.fh = NULL;
+}
+
 static void cdr_write_line(struct gsm_network *net, const char *line)
 {
 	FILE *f;
@@ -423,15 +464,19 @@ static void cdr_write_line(struct gsm_network *net, const char *line)
 
 	cdr_maybe_rotate(net);
 
-	f = fopen(net->cdr.filename, "a");
-	if (!f) {
-		LOGP(DMSC, LOGL_ERROR, "Failed to open CDR file %s\n",
-		     net->cdr.filename);
+	f = cdr_file(net);
+	if (!f)
 		return;
-	}
-	maybe_print_header(f);
+
 	fprintf(f, "%s\n", line);
-	fclose(f);
+	/* Flush but do not fsync: the record reaches the page cache exactly as
+	 * it did when every write was followed by fclose(), so durability is
+	 * unchanged - we only dropped the open/close around it. */
+	if (fflush(f) != 0) {
+		LOGP(DMSC, LOGL_ERROR, "Failed to write CDR file %s: %s\n",
+		     net->cdr.filename, strerror(errno));
+		msc_cdr_close_file(net);
+	}
 }
 
 static uint64_t next_record_number(struct gsm_network *net)
