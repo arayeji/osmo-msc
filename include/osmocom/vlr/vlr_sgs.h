@@ -117,4 +117,7 @@ void vlr_sgs_pag_ack(struct vlr_instance *vlr, const char *imsi);
 void vlr_sgs_ue_unr(struct vlr_instance *vlr, const char *imsi, enum sgsap_sgs_cause cause);
 void vlr_sgs_pag(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind);
 bool vlr_sgs_pag_pend(struct vlr_subscr *vsub);
+unsigned int vlr_sgs_pag_inflight(void);
 void vlr_sgs_pag_stop(struct vlr_subscr *vsub);
+/* 29.118 5.1.2.2: SERVICE-REQUEST after VLR restart (SGs-NULL). */
+void vlr_sgs_rx_service_req(struct vlr_subscr *vsub);

@@ -43,6 +43,7 @@ static const struct value_string sgs_ue_fsm_event_names[] = {
 	{SGS_UE_E_TX_PAGING, "TX_PAGING"},
 	{SGS_UE_E_RX_SGSAP_UE_UNREACHABLE, "RX_SGSAP_UE_UNREACH"},
 	{SGS_UE_E_RX_TMSI_REALLOC, "RX_TMSI_REALLOC"},
+	{SGS_UE_E_RX_SERVICE_REQ, "RX_SERVICE_REQ"},
 	{0, NULL}
 };
 
@@ -51,6 +52,9 @@ static void to_null(struct osmo_fsm_inst *fi)
 {
 	struct vlr_subscr *vsub = fi->priv;
 	osmo_fsm_inst_state_chg(fi, SGS_UE_ST_NULL, 0, 0);
+	/* Association gone: do not leave Confirmed=true or later MT SMS
+	 * hits "Will not Page" in SGs-NULL (sgs_iface_paging_cb). */
+	vsub->conf_by_radio_contact_ind = false;
 
 	/* Note: This is only relevant for cases where we are in the middle
 	 * of an TMSI reallocation procedure. Should a failure of some sort
@@ -125,6 +129,8 @@ static void respawn_paging(struct vlr_subscr *vsub)
 /* Figure 4.2.2.1 SGs-NULL */
 static void sgs_ue_fsm_null(struct osmo_fsm_inst *fi, uint32_t event, void *data)
 {
+	struct vlr_subscr *vsub = fi->priv;
+
 	switch (event) {
 	case SGS_UE_E_RX_LU_FROM_MME:
 		perform_lu(fi);
@@ -138,6 +144,11 @@ static void sgs_ue_fsm_null(struct osmo_fsm_inst *fi, uint32_t event, void *data
 	case SGS_UE_E_RX_TMSI_REALLOC:
 		/* Late TMSI REALLOCATION COMPLETE after the association went
 		 * back to NULL; nothing to do. */
+		break;
+	case SGS_UE_E_RX_SERVICE_REQ:
+		/* 29.118 5.1.2.2: paging response after VLR restart. */
+		vsub->conf_by_radio_contact_ind = true;
+		osmo_fsm_inst_state_chg(fi, SGS_UE_ST_ASSOCIATED, 0, 0);
 		break;
 	default:
 		OSMO_ASSERT(0);
@@ -204,6 +215,9 @@ static void sgs_ue_fsm_lau_present(struct osmo_fsm_inst *fi, uint32_t event, voi
 		/* TMSI REALLOCATION COMPLETE racing with a new LU; the pending
 		 * LU result will supersede it, nothing to do. */
 		break;
+	case SGS_UE_E_RX_SERVICE_REQ:
+		/* Paging response during LU: stay in LA-UPDATE-PRESENT. */
+		break;
 	default:
 		OSMO_ASSERT(0);
 		break;
@@ -268,6 +282,9 @@ static void sgs_ue_fsm_associated(struct osmo_fsm_inst *fi, uint32_t event, void
 	case SGS_UE_E_RX_LU_FROM_MME:
 		perform_lu(fi);
 		break;
+	case SGS_UE_E_RX_SERVICE_REQ:
+		/* Already associated. */
+		break;
 	default:
 		OSMO_ASSERT(0);
 		break;
@@ -331,10 +348,12 @@ static const struct osmo_fsm_state sgs_ue_fsm_states[] = {
 			| S(SGS_UE_E_TX_PAGING)
 			| S(SGS_UE_E_RX_PAGING_FAILURE)
 			| S(SGS_UE_E_RX_TMSI_REALLOC)
+			| S(SGS_UE_E_RX_SERVICE_REQ)
 			,
 		.out_state_mask = 0
 			| S(SGS_UE_ST_NULL)
 			| S(SGS_UE_ST_LA_UPD_PRES)
+			| S(SGS_UE_ST_ASSOCIATED)
 			,
 	},
 	[SGS_UE_ST_LA_UPD_PRES] = {
@@ -347,6 +366,7 @@ static const struct osmo_fsm_state sgs_ue_fsm_states[] = {
 			| S(SGS_UE_E_RX_PAGING_FAILURE)
 			| S(SGS_UE_E_RX_ALERT_FAILURE)
 			| S(SGS_UE_E_RX_TMSI_REALLOC)
+			| S(SGS_UE_E_RX_SERVICE_REQ)
 			,
 		.out_state_mask = 0
 			| S(SGS_UE_ST_NULL)
@@ -364,6 +384,7 @@ static const struct osmo_fsm_state sgs_ue_fsm_states[] = {
 			| S(SGS_UE_E_RX_PAGING_FAILURE)
 			| S(SGS_UE_E_RX_ALERT_FAILURE)
 			| S(SGS_UE_E_RX_LU_FROM_MME)
+			| S(SGS_UE_E_RX_SERVICE_REQ)
 			,
 		.out_state_mask = 0
 			| S(SGS_UE_ST_NULL)

@@ -36,6 +36,7 @@ enum sgs_ue_fsm_event {
 	SGS_UE_E_TX_PAGING,
 	SGS_UE_E_RX_SGSAP_UE_UNREACHABLE,
 	SGS_UE_E_RX_TMSI_REALLOC,
+	SGS_UE_E_RX_SERVICE_REQ,
 };
 
 void vlr_sgs_fsm_init(void);

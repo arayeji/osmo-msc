@@ -57,6 +57,8 @@ struct sgs_state {
 	} cfg;
 
 	struct osmo_timer_list persist_timer;
+	/* Drain SGs sockets even if poll() missed POLLIN. */
+	struct osmo_timer_list rx_kick_timer;
 };
 
 struct sgs_state *sgs_server_alloc(void *ctx);

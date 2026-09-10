@@ -32,8 +32,11 @@
 #include <osmocom/core/socket.h>
 #include <osmocom/core/select.h>
 #include <osmocom/core/timer.h>
+#include <osmocom/core/linuxlist.h>
 #include <osmocom/netif/stream.h>
 #include <netinet/sctp.h>
+
+#define SGS_SCTP_SOCKBUF (4 * 1024 * 1024)
 
 #define LOGSGC(sgc, lvl, fmt, args...) \
 	LOGP(DSGS, lvl, "%s: " fmt, (sgc)->sockname, ## args)
@@ -239,6 +242,20 @@ static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 	}
 }
 
+/* poll() can miss SCTP POLLIN while the main loop is in timers/paging.
+ * Kick-drain so the advertised window does not stay at 0. */
+static void sgs_rx_kick_cb(void *data)
+{
+	struct sgs_state *sgs = data;
+	struct sgs_connection *sgc, *tmp;
+
+	llist_for_each_entry_safe(sgc, tmp, &sgs->conn_list, entry) {
+		if (sgc->srv)
+			sgs_conn_readable_cb(sgc->srv);
+	}
+	osmo_timer_schedule(&sgs->rx_kick_timer, 0, 20000);
+}
+
 /* call-back when new connection is closed ed on SGs */
 static int sgs_conn_closed_cb(struct osmo_stream_srv *conn)
 {
@@ -281,8 +298,12 @@ static int sgs_accept_cb(struct osmo_stream_srv_link *link, int fd)
 	}
 	{
 		int fl = fcntl(fd, F_GETFL);
+		int buf = SGS_SCTP_SOCKBUF;
 		if (fl >= 0)
 			fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+		/* Kernel may cap to net.core.rmem_max (~208KB by default). */
+		setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof(buf));
+		setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
 	}
 	sgs_close_replaced_peer_conns(sgs, fd, sgc);
 	LOGSGC(sgc, LOGL_INFO, "Accepted new SGs connection\n");
@@ -350,5 +371,8 @@ int sgs_server_open(struct sgs_state *sgs)
 	}
 
 	LOGP(DSGS, LOGL_NOTICE, "SGs socket bound to %s\n", osmo_sock_get_name2(ofd->fd));
+
+	osmo_timer_setup(&sgs->rx_kick_timer, sgs_rx_kick_cb, sgs);
+	osmo_timer_schedule(&sgs->rx_kick_timer, 0, 20000);
 	return 0;
 }

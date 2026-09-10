@@ -29,6 +29,32 @@
 #include "vlr_core.h"
 #include "vlr_sgs_fsm.h"
 
+/* Concurrent Ts5 pagings. Used to cap unconfirmed (VLR-restart) SMS pages. */
+static unsigned int s_sgs_pag_inflight;
+
+static void sgs_pag_inflight_inc(void)
+{
+	s_sgs_pag_inflight++;
+}
+
+static void sgs_pag_inflight_dec(void)
+{
+	if (s_sgs_pag_inflight)
+		s_sgs_pag_inflight--;
+}
+
+unsigned int vlr_sgs_pag_inflight(void)
+{
+	return s_sgs_pag_inflight;
+}
+
+void vlr_sgs_rx_service_req(struct vlr_subscr *vsub)
+{
+	if (!vsub || !vsub->sgs_fsm)
+		return;
+	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_SERVICE_REQ, NULL);
+}
+
 const struct value_string sgs_state_timer_names[] = {
 	{SGS_STATE_TS5, "Ts5"},
 	{SGS_STATE_TS6_2, "Ts6-2"},
@@ -287,6 +313,7 @@ void vlr_sgs_pag_stop(struct vlr_subscr *vsub)
 		return;
 	osmo_timer_del(&vsub->sgs.Ts5);
 	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
+	sgs_pag_inflight_dec();
 }
 
 /*! Notify that an SGs paging has been rejected by the MME.
@@ -361,7 +388,7 @@ static void Ts5_timeout_cb(void *arg)
 	 * failed. Other actions may check the status of Ts5 to see if a paging
 	 * is still ongoing or not. */
 
-	LOGSGS(LOGL_ERROR, "(sub %s) Paging via SGs interface timed out (%s expired)!\n",
+	LOGSGS(LOGL_DEBUG, "(sub %s) Paging via SGs interface timed out (%s expired)!\n",
 	     vlr_subscr_msisdn_or_name(vsub), vlr_sgs_state_timer_name(SGS_STATE_TS5));
 
 	/* Keep vsub alive: the SGS_PAGING_REQ put below may be the last ref,
@@ -376,6 +403,7 @@ static void Ts5_timeout_cb(void *arg)
 	/* Balance ref count increment from vlr_sgs_pag(). Timer is already not
 	 * pending here; late pag_rej/ack must not put again (see vlr_sgs_pag_stop). */
 	vlr_subscr_put(vsub, VSUB_USE_SGS_PAGING_REQ);
+	sgs_pag_inflight_dec();
 	vlr_subscr_put(vsub, __func__);
 }
 
@@ -414,8 +442,10 @@ void vlr_sgs_pag(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind)
 
 	/* Ensure that the reference count is increased by one while the
 	 * paging is happening. Balanced in Ts5_timeout_cb / vlr_sgs_pag_stop. */
-	if (!already_paging)
+	if (!already_paging) {
 		vlr_subscr_get(vsub, VSUB_USE_SGS_PAGING_REQ);
+		sgs_pag_inflight_inc();
+	}
 }
 
 /*! Check if the SGs interface is currently paging

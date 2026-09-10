@@ -38,6 +38,11 @@ restart (TS 23.007 / 29.118 5.1.2.2). `no vlr-persist` keeps a RAM-only VLR
 writes on every LU accept and can stall the SGs socket at high LU rates. The
 default is persist enabled with a 2 second batch.
 
+Restored records come back as SGs-NULL / unconfirmed. A paging response
+(`SGsAP-SERVICE-REQUEST`) in that state is accepted and moves the UE to
+SGs-ASSOCIATED (TS 29.118 5.1.2.2). Concurrent MT SMS pages of still-unconfirmed
+UEs are capped so a large restored VLR cannot fill the SGs SCTP receive queue.
+
 In order to fine tune the behavior of the SGs interface the user also has
 control over the relevant timers (`ts5`, `ts6-2`, `ts7`, `ts11`, `ts14`, `ts15`)
 and counters (`ns7`, `ns11`). Each timer and counter has to be configured

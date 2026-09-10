@@ -538,7 +538,8 @@ struct sgs_mme_ctx *sgs_mme_ctx_by_vsub(struct vlr_subscr *vsub, uint8_t msg_typ
 /* Make sure that the subscriber is known and that the subscriber is in the
  * SGs associated state. In case of failure the function returns false and
  * automatically sends a release message to the MME */
-static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, char *imsi)
+static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, char *imsi,
+				  bool allow_unassociated)
 {
 	struct vlr_subscr *vsub;
 	struct msgb *resp;
@@ -554,8 +555,14 @@ static bool check_sgs_association(struct sgs_connection *sgc, struct msgb *msg, 
 		return false;
 	}
 
-	/* The SGs FSM must also be in SGs associated state */
+	/* SERVICE-REQUEST after VLR restart arrives in SGs-NULL (29.118 5.1.2.2). */
 	if (vsub->sgs_fsm->state != SGS_UE_ST_ASSOCIATED) {
+		if (allow_unassociated &&
+		    (vsub->sgs_fsm->state == SGS_UE_ST_NULL ||
+		     vsub->sgs_fsm->state == SGS_UE_ST_LA_UPD_PRES)) {
+			vlr_subscr_put(vsub, __func__);
+			return true;
+		}
 		LOGSGC(sgc, LOGL_DEBUG, "(sub %s) SGsAP Message %s subscriber not SGs-associated, releasing\n",
 		       vlr_subscr_name(vsub), sgsap_msg_type_name(msg_type));
 		resp = gsm29118_create_release_req(vsub->imsi, SGSAP_SGS_CAUSE_IMSI_DET_EPS_NONEPS);
@@ -819,6 +826,25 @@ int sgs_iface_paging_cb(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind
 
 	if (serv_ind == SGSAP_SERV_IND_PAGING_TIMEOUT) {
 		paging_expired(vsub);
+		return 0;
+	}
+
+	if (vsub->imsi_detached_flag) {
+		LOGPFSMSL(vsub->sgs_fsm, DPAG, LOGL_DEBUG, "Will not Page (IMSI detached)\n");
+		return -EINVAL;
+	}
+
+	/* After persist restore, MT SMS would page ~all unconfirmed UEs at once
+	 * and fill the SGs socket with unanswered Ts5 work. CS paging is not
+	 * capped. Confirmed associations use the normal SMS-queue limit. */
+#define SGS_MAX_UNCONFIRMED_PAGES 64
+	if (serv_ind != SGSAP_SERV_IND_CS_CALL &&
+	    !vsub->conf_by_radio_contact_ind &&
+	    !vlr_sgs_pag_pend(vsub) &&
+	    vlr_sgs_pag_inflight() >= SGS_MAX_UNCONFIRMED_PAGES) {
+		LOGPFSMSL(vsub->sgs_fsm, DPAG, LOGL_DEBUG,
+			  "Defer SGs page (unconfirmed inflight cap %u)\n",
+			  SGS_MAX_UNCONFIRMED_PAGES);
 		return 0;
 	}
 
@@ -1162,13 +1188,15 @@ static int sgs_rx_service_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	const uint8_t *serv_ind_ie;
 	struct msc_a *msc_a;
 	struct vlr_subscr *vsub;
+	bool was_unassociated;
+	bool was_paging;
 
 	/* Note: While in other RAN concepts a service request is used to
 	 * initiate mobile originated operation, the service request in SGsAP
 	 * is comparable to a paging response. The SGsAP SERVICE REQUEST must
 	 * not be confused or compared with a CM SERVICE REQUEST! */
 
-	if (!check_sgs_association(sgc, msg, imsi))
+	if (!check_sgs_association(sgc, msg, imsi, true))
 		return 0;
 
 	vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
@@ -1176,11 +1204,20 @@ static int sgs_rx_service_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	 * we must have a vsub at this point! */
 	OSMO_ASSERT(vsub);
 
-	/* The Service request is intended as a paging response, if one is
-	 * received while nothing is paging something is very wrong! */
-	if (!vlr_sgs_pag_pend(vsub)) {
+	was_unassociated = (vsub->sgs_fsm->state != SGS_UE_ST_ASSOCIATED);
+	was_paging = vlr_sgs_pag_pend(vsub);
+
+	/* 29.118 5.1.2.2: paging response in SGs-NULL after VLR restart. */
+	if (vsub->sgs_fsm->state == SGS_UE_ST_NULL)
+		vlr_sgs_rx_service_req(vsub);
+
+	/* Associated without a page: spec STATUS. Unassociated without a page
+	 * (late Ts5 or implicit confirm): keep the association, no STATUS. */
+	if (!was_paging) {
 		vlr_subscr_put(vsub, __func__);
-		return sgs_tx_status(sgc, imsi, SGSAP_SGS_CAUSE_MSG_INCOMP_STATE, msg, -1);
+		if (!was_unassociated)
+			return sgs_tx_status(sgc, imsi, SGSAP_SGS_CAUSE_MSG_INCOMP_STATE, msg, -1);
+		return 0;
 	}
 	serv_ind_ie = TLVP_VAL_MINLEN(tp, SGSAP_IE_SERVICE_INDICATOR, 1);
 
@@ -1231,7 +1268,7 @@ static int sgs_rx_ul_ud(struct sgs_connection *sgc, struct msgb *msg, const stru
 	const uint8_t *nas_msg_container_ie;
 	struct vlr_subscr *vsub;
 
-	if (!check_sgs_association(sgc, msg, imsi))
+	if (!check_sgs_association(sgc, msg, imsi, false))
 		return 0;
 
 	vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
