@@ -139,6 +139,40 @@ DEFUN(cfg_sgs_counter, cfg_sgs_counter_cmd,
 	return CMD_WARNING;
 }
 
+DEFUN(cfg_sgs_vlr_persist, cfg_sgs_vlr_persist_cmd,
+      "vlr-persist",
+      "Write SGs associations to sqlite so MT paging survives MSC restart (TS 23.007 / 29.118)\n")
+{
+	struct sgs_state *sgs = vty->index;
+
+	sgs->cfg.vlr_persist = true;
+	sgs_vlr_persist_reconfig();
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_sgs_no_vlr_persist, cfg_sgs_no_vlr_persist_cmd,
+      "no vlr-persist",
+      NO_STR "Do not persist or restore SGs associations (stock OsmoMSC VLR)\n")
+{
+	struct sgs_state *sgs = vty->index;
+
+	sgs->cfg.vlr_persist = false;
+	sgs_vlr_persist_reconfig();
+	return CMD_SUCCESS;
+}
+
+DEFUN(cfg_sgs_vlr_persist_batch, cfg_sgs_vlr_persist_batch_cmd,
+      "vlr-persist-batch <0-60>",
+      "How SGs LU accepts are written to sqlite\n"
+      "0 = immediate write (can stall SGs at high LU rate); 1-60 = flush every N seconds\n")
+{
+	struct sgs_state *sgs = vty->index;
+
+	sgs->cfg.vlr_persist_batch_sec = atoi(argv[0]);
+	sgs_vlr_persist_reconfig();
+	return CMD_SUCCESS;
+}
+
 DEFUN(show_sgs_conn, show_sgs_conn_cmd,
       "show sgs-connections", SHOW_STR
       "Show SGs interface connections / MMEs\n")
@@ -161,6 +195,10 @@ static int config_write_sgs(struct vty *vty)
 	vty_out(vty, " local-port %u%s", sgs->cfg.local_port, VTY_NEWLINE);
 	vty_out(vty, " local-ip %s%s", sgs->cfg.local_addr, VTY_NEWLINE);
 	vty_out(vty, " vlr-name %s%s", sgs->cfg.vlr_name, VTY_NEWLINE);
+	if (!sgs->cfg.vlr_persist)
+		vty_out(vty, " no vlr-persist%s", VTY_NEWLINE);
+	if (sgs->cfg.vlr_persist_batch_sec != SGS_VLR_PERSIST_BATCH_DEFAULT)
+		vty_out(vty, " vlr-persist-batch %u%s", sgs->cfg.vlr_persist_batch_sec, VTY_NEWLINE);
 
 	for (i = 0; i < ARRAY_SIZE(sgs->cfg.timer); i++) {
 		if (sgs->cfg.timer[i] == sgs_state_timer_defaults[i])
@@ -189,6 +227,9 @@ void sgs_vty_init(void)
 	install_element(CFG_SGS_NODE, &cfg_sgs_timer_cmd);
 	install_element(CFG_SGS_NODE, &cfg_sgs_counter_cmd);
 	install_element(CFG_SGS_NODE, &cfg_sgs_vlr_name_cmd);
+	install_element(CFG_SGS_NODE, &cfg_sgs_vlr_persist_cmd);
+	install_element(CFG_SGS_NODE, &cfg_sgs_no_vlr_persist_cmd);
+	install_element(CFG_SGS_NODE, &cfg_sgs_vlr_persist_batch_cmd);
 
 	install_element_ve(&show_sgs_conn_cmd);
 }

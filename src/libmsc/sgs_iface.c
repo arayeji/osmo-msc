@@ -21,7 +21,9 @@
  */
 
 #include <errno.h>
+#include <string.h>
 #include <time.h>
+#include <talloc.h>
 
 #include <osmocom/core/utils.h>
 #include <osmocom/core/msgb.h>
@@ -74,6 +76,189 @@ static struct osmo_fsm sgs_vlr_reset_fsm;
 static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg);
 
 struct sgs_state *g_sgs;
+
+enum sgs_persist_op {
+	SGS_PERSIST_UPSERT,
+	SGS_PERSIST_DEL_IMSI,
+	SGS_PERSIST_DEL_MME,
+};
+
+struct sgs_persist_pending {
+	struct llist_head entry;
+	enum sgs_persist_op op;
+	struct db_sgs_assoc row;
+};
+
+static LLIST_HEAD(sgs_persist_pending);
+
+static void sgs_persist_flush(void *data);
+static void sgs_persist_schedule(void);
+
+bool sgs_vlr_persist_enabled(void)
+{
+	return g_sgs && g_sgs->cfg.vlr_persist;
+}
+
+static struct sgs_persist_pending *sgs_persist_find_imsi(const char *imsi)
+{
+	struct sgs_persist_pending *p;
+
+	if (!imsi || !imsi[0])
+		return NULL;
+	llist_for_each_entry(p, &sgs_persist_pending, entry) {
+		if (p->op == SGS_PERSIST_DEL_MME)
+			continue;
+		if (!strcmp(p->row.imsi, imsi))
+			return p;
+	}
+	return NULL;
+}
+
+static struct sgs_persist_pending *sgs_persist_alloc(enum sgs_persist_op op)
+{
+	struct sgs_persist_pending *p = talloc_zero(g_sgs, struct sgs_persist_pending);
+
+	if (!p)
+		return NULL;
+	p->op = op;
+	llist_add_tail(&p->entry, &sgs_persist_pending);
+	return p;
+}
+
+static void sgs_persist_schedule(void)
+{
+	unsigned int sec;
+
+	if (!g_sgs || !g_sgs->cfg.vlr_persist)
+		return;
+	sec = g_sgs->cfg.vlr_persist_batch_sec;
+	if (!sec) {
+		sgs_persist_flush(g_sgs);
+		return;
+	}
+	if (osmo_timer_pending(&g_sgs->persist_timer))
+		return;
+	osmo_timer_schedule(&g_sgs->persist_timer, sec, 0);
+}
+
+static void sgs_persist_flush(void *data)
+{
+	struct sgs_persist_pending *p, *n;
+	unsigned int n_up = 0, n_del = 0;
+	bool use_tx;
+
+	if (g_sgs)
+		osmo_timer_del(&g_sgs->persist_timer);
+	if (llist_empty(&sgs_persist_pending))
+		return;
+
+	use_tx = db_trans_begin() == 0;
+	llist_for_each_entry_safe(p, n, &sgs_persist_pending, entry) {
+		switch (p->op) {
+		case SGS_PERSIST_UPSERT:
+			if (db_sgs_assoc_upsert_row(&p->row) == 0)
+				n_up++;
+			break;
+		case SGS_PERSIST_DEL_IMSI:
+			if (db_sgs_assoc_delete(p->row.imsi) == 0)
+				n_del++;
+			break;
+		case SGS_PERSIST_DEL_MME:
+			if (db_sgs_assoc_delete_mme(p->row.mme_name) == 0)
+				n_del++;
+			break;
+		}
+		llist_del(&p->entry);
+		talloc_free(p);
+	}
+	if (use_tx && db_trans_commit() < 0)
+		db_trans_rollback();
+	if (n_up || n_del)
+		LOGP(DSGS, LOGL_DEBUG, "VLR persist flush: %u upsert, %u delete\n", n_up, n_del);
+}
+
+void sgs_vlr_persist_init(struct sgs_state *sgs)
+{
+	if (!sgs)
+		return;
+	osmo_timer_setup(&sgs->persist_timer, sgs_persist_flush, sgs);
+}
+
+void sgs_vlr_persist_reconfig(void)
+{
+	if (!g_sgs)
+		return;
+	if (!g_sgs->cfg.vlr_persist) {
+		struct sgs_persist_pending *p, *n;
+
+		osmo_timer_del(&g_sgs->persist_timer);
+		llist_for_each_entry_safe(p, n, &sgs_persist_pending, entry) {
+			llist_del(&p->entry);
+			talloc_free(p);
+		}
+		return;
+	}
+	if (!llist_empty(&sgs_persist_pending))
+		sgs_persist_schedule();
+}
+
+void sgs_vlr_persist_vsub(struct vlr_subscr *vsub)
+{
+	struct sgs_persist_pending *p;
+
+	if (!sgs_vlr_persist_enabled() || !vsub || !vsub->imsi[0] || !vsub->sgs.mme_name[0])
+		return;
+	if (!g_sgs->cfg.vlr_persist_batch_sec) {
+		db_sgs_assoc_upsert(vsub);
+		return;
+	}
+	p = sgs_persist_find_imsi(vsub->imsi);
+	if (p)
+		p->op = SGS_PERSIST_UPSERT;
+	else
+		p = sgs_persist_alloc(SGS_PERSIST_UPSERT);
+	if (!p)
+		return;
+	db_sgs_assoc_from_vsub(&p->row, vsub);
+	sgs_persist_schedule();
+}
+
+void sgs_vlr_persist_forget(const char *imsi)
+{
+	struct sgs_persist_pending *p;
+
+	if (!sgs_vlr_persist_enabled() || !imsi || !imsi[0])
+		return;
+	if (!g_sgs->cfg.vlr_persist_batch_sec) {
+		db_sgs_assoc_delete(imsi);
+		return;
+	}
+	p = sgs_persist_find_imsi(imsi);
+	if (!p)
+		p = sgs_persist_alloc(SGS_PERSIST_DEL_IMSI);
+	if (!p)
+		return;
+	p->op = SGS_PERSIST_DEL_IMSI;
+	OSMO_STRLCPY_ARRAY(p->row.imsi, imsi);
+	sgs_persist_schedule();
+}
+
+void sgs_vlr_persist_forget_mme(const char *mme_name)
+{
+	struct sgs_persist_pending *p;
+
+	if (!sgs_vlr_persist_enabled() || !mme_name || !mme_name[0])
+		return;
+	if (!g_sgs->cfg.vlr_persist_batch_sec) {
+		db_sgs_assoc_delete_mme(mme_name);
+		return;
+	}
+	p = sgs_persist_alloc(SGS_PERSIST_DEL_MME);
+	if (!p)
+		return;
+	OSMO_STRLCPY_ARRAY(p->row.mme_name, mme_name);
+	sgs_persist_schedule();
+}
 
 /***********************************************************************
  * SGs state per MME connection
@@ -745,7 +930,7 @@ static int sgs_rx_reset_ind(struct sgs_connection *sgc, struct msgb *msg, const 
 	/* MME failure (29.118 5.8): drop SGs assoc for this MME only.
 	 * The MME lost its associations, so persisted rows cannot page. */
 	if (sgc->mme) {
-		db_sgs_assoc_delete_mme(sgc->mme->fqdn);
+		sgs_vlr_persist_forget_mme(sgc->mme->fqdn);
 		vlr_sgs_reset_mme(gsm_network->vlr, sgc->mme->fqdn);
 	} else
 		vlr_sgs_reset(gsm_network->vlr);
@@ -1605,6 +1790,8 @@ int sgs_iface_restore_assocs(struct gsm_network *network)
 
 	if (!network || !network->vlr)
 		return 0;
+	if (!sgs_vlr_persist_enabled())
+		return 0;
 
 	n = db_sgs_assoc_foreach(sgs_restore_one, network);
 	if (n < 0) {
@@ -1630,6 +1817,7 @@ struct sgs_state *sgs_iface_init(void *ctx, struct gsm_network *network)
 	if (g_sgs)
 		return NULL;
 	g_sgs = sgs;
+	sgs_vlr_persist_init(sgs);
 
 	return sgs;
 }

@@ -28,7 +28,15 @@ sgs
  local-ip 127.0.0.1
  local-port 29118
  vlr-name vlr.example.net
+ vlr-persist
+ vlr-persist-batch 2
 ----
+
+`vlr-persist` writes SGs associations to sqlite so MT paging can survive an MSC
+restart (TS 23.007 / 29.118 5.1.2.2). `no vlr-persist` keeps a RAM-only VLR
+(stock OsmoMSC). `vlr-persist-batch` is the flush interval in seconds; `0`
+writes on every LU accept and can stall the SGs socket at high LU rates. The
+default is persist enabled with a 2 second batch.
 
 In order to fine tune the behavior of the SGs interface the user also has
 control over the relevant timers (`ts5`, `ts6-2`, `ts7`, `ts11`, `ts14`, `ts15`)

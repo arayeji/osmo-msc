@@ -77,9 +77,14 @@ int db_sms_delete_expired_message_by_id(unsigned long long sms_id);
 void db_sms_delete_oldest_expired_message(void);
 
 /* SGs VLR restoration (TS 23.007 / 29.118 5.1.2.2) */
+void db_sgs_assoc_from_vsub(struct db_sgs_assoc *row, const struct vlr_subscr *vsub);
 int db_sgs_assoc_upsert(const struct vlr_subscr *vsub);
+int db_sgs_assoc_upsert_row(const struct db_sgs_assoc *row);
 int db_sgs_assoc_delete(const char *imsi);
 int db_sgs_assoc_delete_mme(const char *mme_name);
 int db_sgs_assoc_foreach(db_sgs_assoc_cb_t cb, void *data);
+int db_trans_begin(void);
+int db_trans_commit(void);
+int db_trans_rollback(void);
 
 #endif /* _DB_H */

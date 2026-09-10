@@ -90,6 +90,12 @@ extern struct sgs_state *g_sgs;
 
 struct sgs_state *sgs_iface_init(void *ctx, struct gsm_network *network);
 int sgs_iface_restore_assocs(struct gsm_network *network);
+void sgs_vlr_persist_init(struct sgs_state *sgs);
+void sgs_vlr_persist_vsub(struct vlr_subscr *vsub);
+void sgs_vlr_persist_forget(const char *imsi);
+void sgs_vlr_persist_forget_mme(const char *mme_name);
+void sgs_vlr_persist_reconfig(void);
+bool sgs_vlr_persist_enabled(void);
 void sgs_mme_detach_connection(struct sgs_connection *sgc);
 void sgs_conn_schedule_destroy(struct sgs_connection *sgc);
 int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg);

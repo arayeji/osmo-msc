@@ -21,7 +21,11 @@
 #pragma once
 
 #include <arpa/inet.h>
+#include <stdbool.h>
+#include <osmocom/core/timer.h>
 #include <osmocom/gsm/protocol/gsm_29_118.h>
+
+#define SGS_VLR_PERSIST_BATCH_DEFAULT 2
 
 #define DEFAULT_SGS_SERVER_IP "0.0.0.0"
 #define DEFAULT_SGS_SERVER_VLR_NAME "vlr.example.net"
@@ -46,7 +50,13 @@ struct sgs_state {
 		unsigned int timer[_NUM_SGS_STATE_TIMERS];
 		/* counters on VLR side */
 		unsigned int counter[_NUM_SGS_STATE_COUNTERS];
+		/* TS 23.007 / 29.118 restart checkpoint. Off = stock OsmoMSC. */
+		bool vlr_persist;
+		/* 0 = sqlite write on each LU accept; else flush every N seconds. */
+		unsigned int vlr_persist_batch_sec;
 	} cfg;
+
+	struct osmo_timer_list persist_timer;
 };
 
 struct sgs_state *sgs_server_alloc(void *ctx);

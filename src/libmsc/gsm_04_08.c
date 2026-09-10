@@ -43,6 +43,7 @@
 #include <osmocom/vlr/vlr_sgs.h>
 #include <osmocom/msc/msc_a.h>
 #include <osmocom/msc/db.h>
+#include <osmocom/msc/sgs_iface.h>
 
 #include <osmocom/gsm/gsm48.h>
 #include <osmocom/gsm/gsm_utils.h>
@@ -1619,12 +1620,12 @@ static int msc_vlr_tx_cm_serv_rej(void *msc_conn_ref, enum osmo_cm_service_type 
 
 static void msc_vlr_sgs_assoc_persist(struct vlr_subscr *vsub)
 {
-	db_sgs_assoc_upsert(vsub);
+	sgs_vlr_persist_vsub(vsub);
 }
 
 static void msc_vlr_sgs_assoc_forget(const char *imsi)
 {
-	db_sgs_assoc_delete(imsi);
+	sgs_vlr_persist_forget(imsi);
 }
 
 /* VLR informs us that the subscriber data has somehow been modified */

@@ -1132,28 +1132,45 @@ static time_t sgs_assoc_expire_unix(const struct vlr_subscr *vsub)
 	return time(NULL) + remaining;
 }
 
-int db_sgs_assoc_upsert(const struct vlr_subscr *vsub)
+void db_sgs_assoc_from_vsub(struct db_sgs_assoc *row, const struct vlr_subscr *vsub)
+{
+	if (!row)
+		return;
+	memset(row, 0, sizeof(*row));
+	if (!vsub)
+		return;
+	OSMO_STRLCPY_ARRAY(row->imsi, vsub->imsi);
+	OSMO_STRLCPY_ARRAY(row->msisdn, vsub->msisdn);
+	row->tmsi = vsub->tmsi;
+	OSMO_STRLCPY_ARRAY(row->mme_name, vsub->sgs.mme_name);
+	row->lai = vsub->sgs.lai;
+	row->last_eutran_plmn_present = vsub->sgs.last_eutran_plmn_present;
+	row->last_eutran_plmn = vsub->sgs.last_eutran_plmn;
+	row->expire_unix = sgs_assoc_expire_unix(vsub);
+}
+
+int db_sgs_assoc_upsert_row(const struct db_sgs_assoc *row)
 {
 	sqlite3_stmt *stmt;
 	int rc;
 
-	if (!g_dbc || !vsub || !vsub->imsi[0] || !vsub->sgs.mme_name[0])
+	if (!g_dbc || !row || !row->imsi[0] || !row->mme_name[0])
 		return 0;
 
 	stmt = g_dbc->stmt[DB_STMT_SGS_ASSOC_UPSERT];
-	db_bind_text(stmt, "$imsi", vsub->imsi);
-	db_bind_text(stmt, "$msisdn", vsub->msisdn);
-	db_bind_int64(stmt, "$tmsi", (int64_t)vsub->tmsi);
-	db_bind_text(stmt, "$mme_name", vsub->sgs.mme_name);
-	db_bind_int(stmt, "$mcc", vsub->sgs.lai.plmn.mcc);
-	db_bind_int(stmt, "$mnc", vsub->sgs.lai.plmn.mnc);
-	db_bind_int(stmt, "$mnc_3_digits", vsub->sgs.lai.plmn.mnc_3_digits ? 1 : 0);
-	db_bind_int(stmt, "$lac", vsub->sgs.lai.lac);
-	db_bind_int(stmt, "$eutran_present", vsub->sgs.last_eutran_plmn_present ? 1 : 0);
-	db_bind_int(stmt, "$eutran_mcc", vsub->sgs.last_eutran_plmn.mcc);
-	db_bind_int(stmt, "$eutran_mnc", vsub->sgs.last_eutran_plmn.mnc);
-	db_bind_int(stmt, "$eutran_mnc_3_digits", vsub->sgs.last_eutran_plmn.mnc_3_digits ? 1 : 0);
-	db_bind_int64(stmt, "$expire_unix", (int64_t)sgs_assoc_expire_unix(vsub));
+	db_bind_text(stmt, "$imsi", row->imsi);
+	db_bind_text(stmt, "$msisdn", row->msisdn);
+	db_bind_int64(stmt, "$tmsi", (int64_t)row->tmsi);
+	db_bind_text(stmt, "$mme_name", row->mme_name);
+	db_bind_int(stmt, "$mcc", row->lai.plmn.mcc);
+	db_bind_int(stmt, "$mnc", row->lai.plmn.mnc);
+	db_bind_int(stmt, "$mnc_3_digits", row->lai.plmn.mnc_3_digits ? 1 : 0);
+	db_bind_int(stmt, "$lac", row->lai.lac);
+	db_bind_int(stmt, "$eutran_present", row->last_eutran_plmn_present ? 1 : 0);
+	db_bind_int(stmt, "$eutran_mcc", row->last_eutran_plmn.mcc);
+	db_bind_int(stmt, "$eutran_mnc", row->last_eutran_plmn.mnc);
+	db_bind_int(stmt, "$eutran_mnc_3_digits", row->last_eutran_plmn.mnc_3_digits ? 1 : 0);
+	db_bind_int64(stmt, "$expire_unix", (int64_t)row->expire_unix);
 
 	rc = sqlite3_step(stmt);
 	db_remove_reset(stmt);
@@ -1163,6 +1180,47 @@ int db_sgs_assoc_upsert(const struct vlr_subscr *vsub)
 		return -1;
 	}
 	return 0;
+}
+
+int db_sgs_assoc_upsert(const struct vlr_subscr *vsub)
+{
+	struct db_sgs_assoc row;
+
+	if (!vsub)
+		return 0;
+	db_sgs_assoc_from_vsub(&row, vsub);
+	return db_sgs_assoc_upsert_row(&row);
+}
+
+static int db_exec_sql(const char *sql)
+{
+	char *errmsg = NULL;
+	int rc;
+
+	if (!g_dbc || !g_dbc->db)
+		return 0;
+	rc = sqlite3_exec(g_dbc->db, sql, NULL, NULL, &errmsg);
+	if (rc != SQLITE_OK) {
+		LOGP(DDB, LOGL_ERROR, "SQL '%s' failed: %s\n", sql, errmsg ? errmsg : "");
+		sqlite3_free(errmsg);
+		return -1;
+	}
+	return 0;
+}
+
+int db_trans_begin(void)
+{
+	return db_exec_sql("BEGIN IMMEDIATE");
+}
+
+int db_trans_commit(void)
+{
+	return db_exec_sql("COMMIT");
+}
+
+int db_trans_rollback(void)
+{
+	return db_exec_sql("ROLLBACK");
 }
 
 int db_sgs_assoc_delete(const char *imsi)

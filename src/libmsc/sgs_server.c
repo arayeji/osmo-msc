@@ -303,6 +303,8 @@ static struct sgs_state *sgs_state_alloc(void *ctx)
 	sgs->cfg.local_port = SGS_PORT_DEFAULT;
 	osmo_strlcpy(sgs->cfg.local_addr, DEFAULT_SGS_SERVER_IP, sizeof(sgs->cfg.local_addr));
 	osmo_strlcpy(sgs->cfg.vlr_name, DEFAULT_SGS_SERVER_VLR_NAME, sizeof(sgs->cfg.vlr_name));
+	sgs->cfg.vlr_persist = true;
+	sgs->cfg.vlr_persist_batch_sec = SGS_VLR_PERSIST_BATCH_DEFAULT;
 
 	return sgs;
 }
