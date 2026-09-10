@@ -194,11 +194,15 @@ static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 	struct osmo_fd *ofd = osmo_stream_srv_get_ofd(conn);
 	struct sgs_connection *sgc = osmo_stream_srv_get_data(conn);
 
-	/* Drain until EAGAIN so a SHUTDOWN notification plus the following
-	 * RESTART/user-data are all handled in this wakeup. One recv per
-	 * select() left the socket readable with a 200KB+ kernel queue while
-	 * the process sat in poll() after we had already destroyed it. */
+	/* Bound the drain so LU/paging TX can leave the stream queue.
+	 * A full drain of a burst never returned to poll(), so POLLOUT
+	 * never ran and osmo_stream_srv logged "tx queue full". */
+#define SGS_RX_MAX_PER_WAKE 32
+	unsigned int n = 0;
+
 	for (;;) {
+		if (n >= SGS_RX_MAX_PER_WAKE)
+			return 0;
 		struct msgb *msg = gsm29118_msgb_alloc();
 		struct sctp_sndrcvinfo sinfo;
 		int flags = 0;
@@ -239,6 +243,7 @@ static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 		}
 
 		sgs_iface_rx(sgc, msg);
+		n++;
 	}
 }
 

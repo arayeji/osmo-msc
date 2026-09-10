@@ -374,7 +374,7 @@ static void vlr_lu_compl_fsm_success(struct osmo_fsm_inst *fi)
 	struct lu_compl_vlr_priv *lcvp = lu_compl_vlr_fi_priv(fi);
 	struct vlr_subscr *vsub = lcvp->vsub;
 	if (!vsub->lu_complete) {
-		vsub->lu_complete = true;
+		vlr_subscr_set_lu_complete(vsub, true);
 		/* Balanced by vlr_subscr_expire() */
 		vlr_subscr_get(vsub, VSUB_USE_ATTACHED);
 	}

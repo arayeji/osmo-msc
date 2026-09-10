@@ -543,7 +543,23 @@ void vlr_subscr_free(struct vlr_subscr *vsub)
 	/* Remove SGs FSM (see also: sgs_iface.c) */
 	vlr_sgs_fsm_remove(vsub);
 
+	if (vsub->lu_complete)
+		vlr_subscr_set_lu_complete(vsub, false);
+
 	talloc_free(vsub);
+}
+
+void vlr_subscr_set_lu_complete(struct vlr_subscr *vsub, bool complete)
+{
+	if (!vsub || vsub->lu_complete == complete)
+		return;
+	vsub->lu_complete = complete;
+	if (!vsub->vlr)
+		return;
+	if (complete)
+		vsub->vlr->subscr_lu_complete++;
+	else if (vsub->vlr->subscr_lu_complete)
+		vsub->vlr->subscr_lu_complete--;
 }
 
 /* Generate a new TMSI and store in vsub->tmsi_new.
@@ -1619,7 +1635,7 @@ bool vlr_subscr_expire(struct vlr_subscr *vsub)
 		if (vsub->vlr->ops.sgs_assoc_forget && vsub->imsi[0])
 			vsub->vlr->ops.sgs_assoc_forget(vsub->imsi);
 		/* balancing the get from vlr_lu_compl_fsm_success() */
-		vsub->lu_complete = false;
+		vlr_subscr_set_lu_complete(vsub, false);
 		vlr_subscr_put(vsub, VSUB_USE_ATTACHED);
 
 		return true;

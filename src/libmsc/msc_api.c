@@ -478,19 +478,20 @@ static void api_json_buf_append_lu_expiry(struct api_json_buf *jb, const struct 
 static unsigned int api_count_subscribers_online(struct gsm_network *net, const char *filter_imsi)
 {
 	struct vlr_subscr *vsub;
-	unsigned int count = 0;
+	unsigned int n;
 
 	if (!net || !net->vlr)
 		return 0;
 
-	llist_for_each_entry(vsub, &net->vlr->subscribers, list) {
-		if (!vsub->lu_complete)
-			continue;
-		if (!api_imsi_matches_vsub(vsub, filter_imsi))
-			continue;
-		count++;
-	}
-	return count;
+	if (!filter_imsi || !filter_imsi[0])
+		return net->vlr->subscr_lu_complete;
+
+	vsub = api_find_vsub(net, filter_imsi);
+	if (!vsub)
+		return 0;
+	n = vsub->lu_complete ? 1 : 0;
+	vlr_subscr_put(vsub, VSUB_USE_API);
+	return n;
 }
 
 static unsigned int api_count_active_calls(struct gsm_network *net, const char *filter_imsi)
@@ -795,7 +796,7 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		"\"reached_active\":%llu}}",
 		json_escape(ctx, ts),
 		active_calls,
-		api_count_subscribers_online(net, NULL),
+		net->vlr ? net->vlr->subscr_lu_complete : 0,
 		sms_pending,
 		vlr_subscribers,
 		ran_peers_active,
@@ -820,43 +821,43 @@ static char *api_json_subscribers_online(void *ctx, struct gsm_network *net, con
 {
 	struct vlr_subscr *vsub;
 	struct api_json_buf jb;
-	bool first = true;
+	struct msc_a *msc_a;
+	char *imsi, *msisdn, *ran;
 
-	if (!net || !net->vlr)
-		return talloc_asprintf(ctx, "{\"subscribers\":[]}");
-	if (api_json_buf_init(&jb, ctx, "{\"subscribers\":[") < 0)
+	if (!filter_imsi || !filter_imsi[0])
 		return NULL;
 
-	llist_for_each_entry(vsub, &net->vlr->subscribers, list) {
-		struct msc_a *msc_a;
-		char *imsi, *msisdn, *ran;
-
-		if (!vsub->lu_complete)
-			continue;
-		if (!api_imsi_matches_vsub(vsub, filter_imsi))
-			continue;
-
-		msc_a = msc_a_for_vsub(vsub, true);
-		imsi = json_escape(ctx, vsub->imsi);
-		msisdn = json_escape(ctx, vsub->msisdn);
-		ran = json_escape(ctx, osmo_rat_type_name(vsub->cs.attached_via_ran));
-
-		if (api_json_buf_append_va(&jb,
-			"%s{\"imsi\":\"%s\",\"msisdn\":\"%s\",\"tmsi\":\"%08X\","
-			"\"lac\":%u,\"ran\":\"%s\",\"state\":\"online\",\"connected\":%s",
-			first ? "" : ",",
-			imsi, msisdn,
-			vsub->tmsi != GSM_RESERVED_TMSI ? vsub->tmsi : 0,
-			vsub->cgi.lai.lac, ran,
-			msc_a ? "true" : "false") < 0)
-			return NULL;
-		api_json_buf_append_lu_expiry(&jb, vsub);
-		if (api_json_buf_append(&jb, "}") < 0)
-			return NULL;
-		first = false;
+	vsub = api_find_vsub(net, filter_imsi);
+	if (!vsub)
+		return talloc_asprintf(ctx, "{\"subscribers\":[]}");
+	if (!vsub->lu_complete) {
+		vlr_subscr_put(vsub, VSUB_USE_API);
+		return talloc_asprintf(ctx, "{\"subscribers\":[]}");
 	}
 
-	if (api_json_buf_append(&jb, "]}") < 0)
+	if (api_json_buf_init(&jb, ctx, "{\"subscribers\":[") < 0) {
+		vlr_subscr_put(vsub, VSUB_USE_API);
+		return NULL;
+	}
+
+	msc_a = msc_a_for_vsub(vsub, true);
+	imsi = json_escape(ctx, vsub->imsi);
+	msisdn = json_escape(ctx, vsub->msisdn);
+	ran = json_escape(ctx, osmo_rat_type_name(vsub->cs.attached_via_ran));
+
+	if (api_json_buf_append_va(&jb,
+		"{\"imsi\":\"%s\",\"msisdn\":\"%s\",\"tmsi\":\"%08X\","
+		"\"lac\":%u,\"ran\":\"%s\",\"state\":\"online\",\"connected\":%s",
+		imsi, msisdn,
+		vsub->tmsi != GSM_RESERVED_TMSI ? vsub->tmsi : 0,
+		vsub->cgi.lai.lac, ran,
+		msc_a ? "true" : "false") < 0) {
+		vlr_subscr_put(vsub, VSUB_USE_API);
+		return NULL;
+	}
+	api_json_buf_append_lu_expiry(&jb, vsub);
+	vlr_subscr_put(vsub, VSUB_USE_API);
+	if (api_json_buf_append(&jb, "}]}") < 0)
 		return NULL;
 	return jb.data;
 }
@@ -1492,6 +1493,11 @@ static void api_handle_request(struct msc_api_conn *conn)
 	}
 
 	if (!strcmp(method, "GET") && !strcmp(path, "/api/subscribers/online")) {
+		if (!filter_imsi) {
+			api_send_response(conn->srv, 413, "Payload Too Large",
+					  "{\"error\":\"response too large; use /api/stats or ?imsi=\"}");
+			return;
+		}
 		json = api_json_subscribers_online(ctx, net, filter_imsi);
 		api_reply_json(conn->srv, json);
 		return;

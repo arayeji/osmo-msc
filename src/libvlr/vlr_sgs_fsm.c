@@ -170,7 +170,7 @@ static void sgs_ue_fsm_lau_present(struct osmo_fsm_inst *fi, uint32_t event, voi
 		vsub->imsi_detached_flag = false;
 
 		if (!vsub->lu_complete) {
-			vsub->lu_complete = true;
+			vlr_subscr_set_lu_complete(vsub, true);
 			/* Balanced by vlr_subscr_expire() */
 			vlr_subscr_get(vsub, VSUB_USE_ATTACHED);
 		}

@@ -1805,7 +1805,7 @@ static int sgs_restore_one(void *data, const struct db_sgs_assoc *row)
 	vsub->conf_by_radio_contact_ind = false;
 	vsub->sub_dataconf_by_hlr_ind = false;
 	vsub->loc_conf_in_hlr_ind = false;
-	vsub->lu_complete = true;
+	vlr_subscr_set_lu_complete(vsub, true);
 	vsub->imsi_detached_flag = false;
 
 	if (row->expire_unix > 0 && osmo_clock_gettime(CLOCK_MONOTONIC, &mono) == 0)

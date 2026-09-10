@@ -299,6 +299,8 @@ struct vlr_instance {
 	} cfg;
 	struct osmo_stat_item_group *statg;
 	struct rate_ctr_group *ctrg;
+	/* lu_complete subscribers. /api/stats must not walk the list. */
+	unsigned int subscr_lu_complete;
 	/* A free-form pointer for use by the caller */
 	void *user_ctx;
 	/*! Optional callback for IMSI-scoped packet tracing (OsmoMSC API trace). */
@@ -434,6 +436,7 @@ struct vlr_subscr *_vlr_subscr_find_by_mi(struct vlr_instance *vlr,
 	OSMO_ASSERT((VSUB) && _osmo_use_count_get_put(&(VSUB)->use_count, USE, -1, SRCFILE, SRCLINE) == 0)
 
 void vlr_subscr_free(struct vlr_subscr *vsub);
+void vlr_subscr_set_lu_complete(struct vlr_subscr *vsub, bool complete);
 int vlr_subscr_alloc_tmsi(struct vlr_subscr *vsub);
 
 void vlr_subscr_set_imsi(struct vlr_subscr *vsub, const char *imsi);
