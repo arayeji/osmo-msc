@@ -1634,9 +1634,10 @@ static void msc_vlr_subscr_update(struct vlr_subscr *subscr)
 	LOG_MSUB(msub, LOGL_DEBUG, "VLR: update for IMSI=%s (MSISDN=%s)%s\n",
 		 subscr->imsi, subscr->msisdn, msub ? "" : " (NO CONN!)");
 	msub_update_id(msub);
-	if (subscr->sgs.mme_name[0] && subscr->sgs_fsm
-	    && subscr->sgs_fsm->state == SGS_UE_ST_ASSOCIATED)
-		db_sgs_assoc_upsert(subscr);
+	/* Do not persist here. InsertSubscriberData / TMSI realloc hit this
+	 * for every LU; sqlite on the select() thread fills the SGs rcvbuf
+	 * until a_rwnd hits 0 and the MME stops. Association is written once
+	 * from vlr_sgs_loc_update_acc_sent() via sgs_assoc_persist. */
 }
 
 /* VLR informs us that the subscriber has been associated with a conn.
