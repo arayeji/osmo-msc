@@ -21,6 +21,7 @@
 #include <errno.h>
 
 #include <osmocom/core/utils.h>
+#include <osmocom/core/use_count.h>
 #include <osmocom/core/tdef.h>
 #include <osmocom/core/fsm.h>
 #include <osmocom/vlr/vlr.h>
@@ -154,20 +155,18 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 	vsub->cgi.lai = *new_lai;
 	vsub->cs.lac = vsub->sgs.lai.lac;
 
-	/* Per spec, subscribers created by an SGs location update do not
-	 * expire automatically (only a 2G LU or an implicit IMSI detach from
-	 * EPS services changes this). However, if the MME never sends detach
-	 * indications for stale UEs, the VLR grows without bound. The optional
-	 * X3212 timer (0 = disabled/spec behavior) sets an inactivity expiry
-	 * that is refreshed on each SGs LU. */
+	/* X3212 (0 = spec: attached SGs UEs never expire). Incomplete LUs
+	 * still get a short expiry so a missing HLR/MME answer cannot leak. */
 	{
 		unsigned long x3212_secs = osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0);
 		struct timespec now;
 
-		if (x3212_secs && osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
-			vsub->expire_lu = now.tv_sec + x3212_secs;
-		else
-			vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+		if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+			if (x3212_secs)
+				vsub->expire_lu = now.tv_sec + x3212_secs;
+			else if (!vsub->lu_complete)
+				vsub->expire_lu = now.tv_sec + 600;
+		}
 	}
 
 	return 0;
@@ -175,15 +174,39 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 
 /*! Notify that the SGs Location Update accept message has been sent to MME.
  *  \param[in] vsub VLR subscriber. */
+void vlr_sgs_lu_release(struct vlr_subscr *vsub)
+{
+	struct osmo_use_count_entry *e;
+
+	if (!vsub)
+		return;
+	e = osmo_use_count_find(&vsub->use_count, VSUB_USE_SGS_LU);
+	if (e && e->count > 0)
+		vlr_subscr_put(vsub, VSUB_USE_SGS_LU);
+}
+
 void vlr_sgs_loc_update_acc_sent(struct vlr_subscr *vsub)
 {
+	unsigned long x3212_secs;
+
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_TX_LU_ACCEPT, NULL);
+
+	x3212_secs = osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0);
+	if (x3212_secs) {
+		struct timespec now;
+		if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
+			vsub->expire_lu = now.tv_sec + x3212_secs;
+	} else if (!vlr_timer_secs(vsub->vlr, 3212, 3312)) {
+		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+	} else {
+		vlr_subscr_enable_expire_lu(vsub);
+	}
 
 	if (vsub->vlr->ops.sgs_assoc_persist)
 		vsub->vlr->ops.sgs_assoc_persist(vsub);
 
 	/* Balance vlr_subscr_find_or_create_by_imsi() in vlr_sgs_loc_update() */
-	vlr_subscr_put(vsub, VSUB_USE_SGS_LU);
+	vlr_sgs_lu_release(vsub);
 
 	/* FIXME: At this point we need to check the status of Ts5 and if
 	 * it is still running this means the LU has interrupted the paging,
@@ -197,7 +220,7 @@ void vlr_sgs_loc_update_rej_sent(struct vlr_subscr *vsub)
 {
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_TX_LU_REJECT, NULL);
 	/* Balance vlr_subscr_find_or_create_by_imsi() in vlr_sgs_loc_update() */
-	vlr_subscr_put(vsub, VSUB_USE_SGS_LU);
+	vlr_sgs_lu_release(vsub);
 }
 
 /*! Perform an SGs IMSI detach.

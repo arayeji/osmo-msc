@@ -716,29 +716,18 @@ static void sgs_tx_loc_upd_resp_cb(struct sgs_lu_response *response)
 	uint8_t new_id[2 + GSM48_TMSI_LEN];
 	uint8_t *new_id_ptr = NULL;
 	int new_id_len = 0;
-	uint8_t resp_msg_type;
 
-	/* Determine message type that is sent next (needed for logging) */
-	if (response->accepted)
-		resp_msg_type = SGSAP_MSGT_LOC_UPD_ACK;
-	else if (response->error)
-		resp_msg_type = SGSAP_MSGT_RESET_IND;
-	else
-		resp_msg_type = SGSAP_MSGT_LOC_UPD_REJ;
-
-	/* Determine MME */
-	mme = sgs_mme_ctx_by_vsub(vsub, resp_msg_type);
-	if (!mme)
-		return;
+	/* Send if the MME socket is up. Always finish the LU so a missing
+	 * conn cannot leak VSUB_USE_SGS_LU (that grew the VLR into millions). */
+	mme = sgs_mme_by_fqdn(g_sgs, vsub->sgs.mme_name);
 
 	/* A single HLR/GSUP failure is not a VLR reset. Sending RESET-IND
 	 * here made the MME re-LU everyone; each fail RESET again (hang). */
 	if (response->error) {
-		resp = gsm29118_create_lu_rej(vsub->imsi, sgs_lu_rej_cause(response), &vsub->sgs.lai);
-		if (mme->conn)
+		if (mme && mme->conn) {
+			resp = gsm29118_create_lu_rej(vsub->imsi, sgs_lu_rej_cause(response), &vsub->sgs.lai);
 			sgs_tx(mme->conn, resp);
-		else
-			msgb_free(resp);
+		}
 		vlr_sgs_loc_update_rej_sent(vsub);
 		return;
 	}
@@ -760,12 +749,16 @@ static void sgs_tx_loc_upd_resp_cb(struct sgs_lu_response *response)
 				LOGPFSMSL(vsub->sgs_fsm, DMM, LOGL_ERROR, "Cannot encode TMSI Mobile Identity\n");
 			}
 		}
-		resp = gsm29118_create_lu_ack(vsub->imsi, &vsub->sgs.lai, new_id_ptr, new_id_len);
-		sgs_tx(mme->conn, resp);
+		if (mme && mme->conn) {
+			resp = gsm29118_create_lu_ack(vsub->imsi, &vsub->sgs.lai, new_id_ptr, new_id_len);
+			sgs_tx(mme->conn, resp);
+		}
 		vlr_sgs_loc_update_acc_sent(vsub);
 	} else {
-		resp = gsm29118_create_lu_rej(vsub->imsi, sgs_lu_rej_cause(response), &vsub->sgs.lai);
-		sgs_tx(mme->conn, resp);
+		if (mme && mme->conn) {
+			resp = gsm29118_create_lu_rej(vsub->imsi, sgs_lu_rej_cause(response), &vsub->sgs.lai);
+			sgs_tx(mme->conn, resp);
+		}
 		vlr_sgs_loc_update_rej_sent(vsub);
 	}
 }

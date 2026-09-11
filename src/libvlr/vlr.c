@@ -878,13 +878,6 @@ void vlr_subscr_expire_lu(void *data)
 	struct vlr_subscr *vsub, *vsub_tmp;
 	struct timespec now;
 
-	/* Periodic location update might be disabled from the VTY,
-	 * so we shall not expire subscribers until explicit IMSI Detach.
-	 * (Unless the X3212 SGs inactivity expiry is enabled.) */
-	if (!vlr_timer_secs(vlr, 3212, 3312)
-	    && !osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0))
-		goto done;
-
 	if (llist_empty(&vlr->subscribers))
 		goto done;
 
@@ -893,13 +886,21 @@ void vlr_subscr_expire_lu(void *data)
 		goto done;
 	}
 
-	llist_for_each_entry_safe(vsub, vsub_tmp, &vlr->subscribers, list) {
-		if (vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION || vsub->expire_lu > now.tv_sec)
-			continue;
+	/* Always reap dated expire_lu (incomplete SGs LUs). T3212/X3212=0
+	 * only means attached UEs stay; do not skip the walk entirely. */
+	{
+		unsigned int n = 0;
 
-		LOGVLR(LOGL_DEBUG, "%s: Location Update expired\n", vlr_subscr_name(vsub));
-		vlr_rate_ctr_inc(vlr, VLR_CTR_DETACH_BY_T3212);
-		vlr_subscr_detach(vsub);
+		llist_for_each_entry_safe(vsub, vsub_tmp, &vlr->subscribers, list) {
+			if (vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION || vsub->expire_lu > now.tv_sec)
+				continue;
+
+			LOGVLR(LOGL_DEBUG, "%s: Location Update expired\n", vlr_subscr_name(vsub));
+			vlr_rate_ctr_inc(vlr, VLR_CTR_DETACH_BY_T3212);
+			vlr_subscr_detach(vsub);
+			if (++n >= 512)
+				break;
+		}
 	}
 
 done:
@@ -1650,6 +1651,7 @@ static int vlr_subscr_detach(struct vlr_subscr *vsub)
 
 	/* paranoia: should any LU or PARQ FSMs still be running, stop them. */
 	vlr_subscr_cancel_attach_fsm(vsub, OSMO_FSM_TERM_ERROR, GSM48_REJECT_CONGESTION);
+	vlr_sgs_lu_release(vsub);
 
 	if (!vsub->imsi_detached_flag)
 		rc = vlr_subscr_purge(vsub);

@@ -108,6 +108,7 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 		       struct osmo_location_area_id *new_lai, struct osmo_plmn_id *last_eutran_plmn);
 void vlr_sgs_loc_update_acc_sent(struct vlr_subscr *vsub);
 void vlr_sgs_loc_update_rej_sent(struct vlr_subscr *vsub);
+void vlr_sgs_lu_release(struct vlr_subscr *vsub);
 void vlr_sgs_detach(struct vlr_instance *vlr, const char *imsi, bool eps);
 void vlr_sgs_imsi_detach(struct vlr_instance *vlr, const char *imsi, enum sgsap_imsi_det_noneps_type type);
 void vlr_sgs_eps_detach(struct vlr_instance *vlr, const char *imsi, enum sgsap_imsi_det_eps_type type);
