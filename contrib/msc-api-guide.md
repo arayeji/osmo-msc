@@ -291,7 +291,11 @@ Response (all fields optional for forward compatibility):
   "active_calls": 0,
   "online_subscribers": 0,
   "sms_pending_queue": 0,
-  "vlr": { "subscribers": 0 },
+  "vlr": {
+    "subscribers": 0,
+    "online": 0,
+    "incomplete": 0
+  },
   "network": {
     "active_ran_peers": 0,
     "total_ran_peers_seen": 1,
@@ -322,18 +326,34 @@ Response (all fields optional for forward compatibility):
 }
 ```
 
-| Field | Source |
-|-------|--------|
-| `active_calls` | `msc.active_calls` stat item |
-| `online_subscribers` | VLR subscribers with completed LU (same as `/api/subscribers/online/count`) |
-| `sms_pending_queue` | SMS queue `ram:pending` stat item |
-| `vlr.subscribers` | VLR subscriber count stat item |
-| `network.*` | MSC RAN peer and SS/USSD stat items |
-| `sigtran.*` | libosmo-sigtran ASP/AS rate counters |
-| `sms.*` | SMS queue delivery rate counters |
-| `calls.*` | MSC location-update and call rate counters |
+| Field | Type | What to show / alert |
+|-------|------|----------------------|
+| `timestamp` | string (UTC ISO-8601) | Sample time |
+| `active_calls` | int | Live CS calls |
+| `online_subscribers` | uint | Attached (LU complete). Same as `vlr.online` and `/api/subscribers/online/count` |
+| `sms_pending_queue` | int | MT SMS waiting in RAM |
+| `vlr.subscribers` | int | Every VLR row (attached + leftovers) |
+| `vlr.online` | uint | Same as `online_subscribers` |
+| `vlr.incomplete` | uint | `vlr.subscribers - vlr.online` (clamped at 0). **Leak / wedge watch** |
+| `network.active_ran_peers` | int | BSC/RNC links up |
+| `network.total_ran_peers_seen` | int | RAN peers ever seen |
+| `network.active_ss_ussd_sessions` | int | Active SS/USSD |
+| `sigtran.asp_up` | uint | SIGTRAN ASPs with traffic |
+| `sigtran.msu_rx` / `msu_tx` / `msu_discarded` | uint | MSU totals |
+| `sigtran.asps[]` | array | Per-ASP name, rx/tx packets, `up` |
+| `sigtran.application_servers[]` | array | Per-AS MSU rx/tx/discarded |
+| `sms.mt_delivery_attempted` | uint | MT SMS delivery attempts |
+| `sms.mt_delivery_failed_paging` | uint | MT SMS paging timeouts |
+| `sms.mt_delivery_failed_no_memory` | uint | MT SMS RP memory errors |
+| `calls.lu_success` | uint | Successful location updates |
+| `calls.mo_setup` | uint | MO call setups |
+| `calls.reached_active` | uint | Calls that reached active |
 
-Keep using separate list endpoints for Live / IMSI watch (`/api/subscribers/online`, `/api/calls/active`, etc.).
+**NMS leak alert:** `vlr.incomplete`. Healthy is hundreds to a few thousand (in-flight LU). Warn above ~10 000 or if it keeps rising while `vlr.online` is flat. The Friday wedge was ~800 000+.
+
+Poll **only** `GET /api/stats` for gauges. Do not poll `/api/subscribers/online` without `?imsi=` (full dump is rejected and used to stall the MSC).
+
+Keep using separate list endpoints for Live / IMSI watch (`/api/subscribers/online?imsi=`, `/api/calls/active`, etc.).
 
 ---
 
@@ -344,7 +364,7 @@ Keep using separate list endpoints for Live / IMSI watch (`/api/subscribers/onli
 | **Dashboard snapshot** | `GET /api/stats` |
 | CS online per IMSI | `GET /api/subscribers/online?imsi=<IMSI>` or `GET /api/subscribers/<IMSI>/online` |
 | CS in-call per IMSI | `GET /api/calls/active?imsi=<IMSI>` or `GET /api/subscribers/<IMSI>/calls/active` |
-| Bulk online | `GET /api/subscribers/online` |
+| Bulk online | Do not poll; use `/api/stats`. Single IMSI: `?imsi=` |
 | Bulk calls | `GET /api/calls/active` |
 
 All list endpoints have a matching `/count` variant.
