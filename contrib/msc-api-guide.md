@@ -361,7 +361,7 @@ Response (all fields optional for forward compatibility):
 | `calls.mo_setup` | uint | MO call setups |
 | `calls.reached_active` | uint | Calls that reached active |
 
-**NMS leak alert:** `vlr.incomplete`. Healthy is hundreds to a few thousand (in-flight LU). Warn above ~10 000 or if it keeps rising while `vlr.online` is flat. The Friday wedge was ~800 000+.
+**NMS leak alert:** prefer `vlr.incomplete_never` (must stay ~0) and `vlr.incomplete_held`. `vlr.incomplete` / `incomplete_future` are in-flight LU; warn if they keep rising while `vlr.online` is flat, or if `incomplete` goes above ~10 000. The Friday wedge was ~800 000+.
 
 Poll **only** `GET /api/stats` for gauges. Do not poll `/api/subscribers/online` without `?imsi=` (full dump is rejected and used to stall the MSC).
 
@@ -380,6 +380,26 @@ Keep using separate list endpoints for Live / IMSI watch (`/api/subscribers/onli
 | Bulk calls | `GET /api/calls/active` |
 
 All list endpoints have a matching `/count` variant.
+
+### PrettyNMS — VLR leftover panel
+
+Poll `GET /api/stats` every 10–30s. Read `vlr.*` only (JSON object). The `incomplete_*` split is from the last 10s sweeper tick, so it can be a few rows off `incomplete`.
+
+| NMS label | JSON path | Widget | Alert |
+|-----------|-----------|--------|-------|
+| VLR total | `vlr.subscribers` | Gauge | |
+| Online | `vlr.online` | Gauge | |
+| Incomplete | `vlr.incomplete` | Gauge + line | Warn > 10 000, or rising while online is flat |
+| In-flight LU | `vlr.incomplete_future` | Stacked area | Healthy hundreds–low thousands |
+| Never expire | `vlr.incomplete_never` | Line (red) | **Warn ≥ 50, critical ≥ 200 and still rising** |
+| Sweeper backlog | `vlr.incomplete_due` | Line | Warn > 4096 (one tick behind) |
+| SGs LU held | `vlr.incomplete_sgs_lu` | Line | In-flight HLR/MME LU |
+| Discarded / 10s | `vlr.incomplete_discarded` | Line | Sweeper working |
+| Discard held | `vlr.incomplete_held` | Line | **Warn ≥ 1** (use-count pin) |
+
+Suggested stacked chart: `incomplete_future` + `incomplete_never` + `incomplete_due` (should ≈ `incomplete`).
+
+Your sample (`never=1`, `due=0`, `held=0`, `incomplete=112`) is healthy post-restart LU churn. `sgs_lu=92` is expected while attaches are still completing.
 
 ---
 
