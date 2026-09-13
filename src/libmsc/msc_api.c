@@ -38,6 +38,7 @@
 #include <osmocom/msc/sccp_ran.h>
 #include <osmocom/msc/cell_id_list.h>
 #include <osmocom/msc/transaction.h>
+#include <osmocom/msc/mncc.h>
 #include <osmocom/msc/vty.h>
 #include <osmocom/sigtran/osmo_ss7.h>
 #include <osmocom/sigtran/sccp_helpers.h>
@@ -1261,6 +1262,104 @@ void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
 	talloc_free(b64);
 }
 
+#define VSUB_USE_API_TRACE_MNCC "API-trace-mncc"
+
+static bool msc_api_has_traces(void)
+{
+	return g_msc_api && !llist_empty(&g_msc_api->traces);
+}
+
+static bool api_trace_num_eq(const char *a, const char *b)
+{
+	return a && a[0] && b && b[0] && !strcmp(a, b);
+}
+
+static size_t api_mncc_trace_len(uint32_t msg_type, size_t len)
+{
+	if (mncc_is_data_frame(msg_type) || msg_type == MNCC_SOCKET_HELLO)
+		return 0;
+	if (msg_type == MNCC_BRIDGE)
+		return len >= sizeof(struct gsm_mncc_bridge) ? sizeof(struct gsm_mncc_bridge) : 0;
+	if (msg_type == MNCC_RTP_CREATE || msg_type == MNCC_RTP_CONNECT || msg_type == MNCC_RTP_FREE)
+		return len >= sizeof(struct gsm_mncc_rtp) ? sizeof(struct gsm_mncc_rtp) : 0;
+	if (len >= sizeof(struct gsm_mncc))
+		return sizeof(struct gsm_mncc);
+	return 0;
+}
+
+void msc_api_trace_mncc(struct gsm_network *net, bool is_rx, const void *data, size_t len)
+{
+	const uint8_t *raw = data;
+	uint32_t msg_type;
+	size_t dump_len;
+	const struct gsm_mncc *mncc = NULL;
+	struct gsm_trans *trans = NULL;
+	struct gsm_trans *trans2 = NULL;
+	struct msc_api_trace *t;
+
+	if (!msc_api_has_traces() || !net || !net->vlr || !raw || len < 8)
+		return;
+
+	memcpy(&msg_type, raw, sizeof(msg_type));
+	dump_len = api_mncc_trace_len(msg_type, len);
+	if (!dump_len)
+		return;
+
+	if (msg_type == MNCC_BRIDGE) {
+		const struct gsm_mncc_bridge *br = data;
+
+		trans = trans_find_by_callref(net, TRANS_CC, br->callref[0]);
+		trans2 = trans_find_by_callref(net, TRANS_CC, br->callref[1]);
+	} else if (msg_type == MNCC_RTP_CREATE || msg_type == MNCC_RTP_CONNECT ||
+		   msg_type == MNCC_RTP_FREE) {
+		const struct gsm_mncc_rtp *rtp = data;
+
+		trans = trans_find_by_callref(net, TRANS_CC, rtp->callref);
+	} else {
+		mncc = data;
+		trans = trans_find_by_callref(net, TRANS_CC, mncc->callref);
+	}
+
+	llist_for_each_entry(t, &g_msc_api->traces, entry) {
+		struct vlr_subscr *vsub;
+		bool hit = false;
+
+		if (mncc && mncc->imsi[0] && !strcmp(mncc->imsi, t->imsi))
+			hit = true;
+		if (trans && trans->vsub && !strcmp(trans->vsub->imsi, t->imsi))
+			hit = true;
+		if (trans2 && trans2->vsub && !strcmp(trans2->vsub->imsi, t->imsi))
+			hit = true;
+
+		vsub = vlr_subscr_find_by_imsi(net->vlr, t->imsi, VSUB_USE_API_TRACE_MNCC);
+		if (vsub) {
+			if (mncc && (vlr_subscr_matches_msisdn(vsub, mncc->called.number)
+				     || vlr_subscr_matches_msisdn(vsub, mncc->calling.number)
+				     || vlr_subscr_matches_msisdn(vsub, mncc->connected.number)
+				     || vlr_subscr_matches_msisdn(vsub, mncc->redirecting.number)))
+				hit = true;
+			if (hit)
+				log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
+			vlr_subscr_put(vsub, VSUB_USE_API_TRACE_MNCC);
+		} else if (mncc && t->msisdn[0] &&
+			   (api_trace_num_eq(mncc->called.number, t->msisdn)
+			    || api_trace_num_eq(mncc->calling.number, t->msisdn)
+			    || api_trace_num_eq(mncc->connected.number, t->msisdn)
+			    || api_trace_num_eq(mncc->redirecting.number, t->msisdn))) {
+			hit = true;
+		}
+
+		if (!hit)
+			continue;
+
+		if (trans && trans->vsub && !strcmp(trans->vsub->imsi, t->imsi))
+			log_set_context(LOG_CTX_VLR_SUBSCR, trans->vsub);
+		else if (trans2 && trans2->vsub && !strcmp(trans2->vsub->imsi, t->imsi))
+			log_set_context(LOG_CTX_VLR_SUBSCR, trans2->vsub);
+		msc_api_trace_packet(t->imsi, "mncc", is_rx, raw, dump_len);
+	}
+}
+
 static void msc_api_trace_gsup(const struct osmo_gsup_message *gsup_msg, bool is_rx)
 {
 	struct msgb *msg;
@@ -1325,6 +1424,7 @@ static int api_trace_enable(struct msc_api_state *api, const char *imsi,
 		return -ENOMEM;
 	}
 	osmo_strlcpy(t->imsi, imsi, sizeof(t->imsi));
+	osmo_strlcpy(t->msisdn, vsub->msisdn, sizeof(t->msisdn));
 
 	/* emit to stderr so the daemon's journald unit captures the lines */
 	tgt = log_target_create_stderr();

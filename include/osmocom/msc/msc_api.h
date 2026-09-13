@@ -23,6 +23,7 @@ struct gsup_client_mux;
 struct msc_api_trace {
 	struct llist_head entry;
 	char imsi[16];
+	char msisdn[16];
 	struct log_target *target;
 };
 
@@ -45,6 +46,7 @@ void msc_api_trace_register_vlr(struct gsm_network *net);
 bool msc_api_trace_active(const char *imsi);
 void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
 			  const uint8_t *data, size_t len);
+void msc_api_trace_mncc(struct gsm_network *net, bool is_rx, const void *data, size_t len);
 void msc_api_trace_gsup_rx(const struct osmo_gsup_message *gsup_msg);
 int msc_gsup_mux_tx(struct gsup_client_mux *gcm, const struct osmo_gsup_message *gsup_msg);
 bool msc_api_configured(const struct msc_api_state *api);

@@ -22,6 +22,7 @@
  */
 
 #include <osmocom/core/utils.h>
+#include <osmocom/core/logging.h>
 #include <osmocom/core/tdef.h>
 #include <osmocom/core/rate_ctr.h>
 #include <osmocom/core/signal.h>
@@ -1516,8 +1517,10 @@ int msc_a_up_l3(struct msc_a *msc_a, struct msgb *msg)
 		return -EACCES;
 	}
 
-	if (vsub)
+	if (vsub) {
+		log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
 		msc_api_trace_packet(vsub->imsi, "dtap", true, msgb_l3(msg), msgb_l3len(msg));
+	}
 
 #if 0
 	if (silent_call_reroute(conn, msg))
@@ -2246,6 +2249,7 @@ int msc_a_tx_dtap_to_i(struct msc_a *msc_a, struct msgb *dtap)
 			const uint8_t *data = msgb_l3(dtap) ? : dtap->data;
 			size_t len = msgb_l3(dtap) ? msgb_l3len(dtap) : msgb_length(dtap);
 
+			log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
 			msc_api_trace_packet(vsub->imsi, "dtap", false, data, len);
 		}
 	}

@@ -59,12 +59,14 @@
 #include <osmocom/msc/sdp_msg.h>
 #include <osmocom/msc/codec_mapping.h>
 #include <osmocom/msc/msc_cdr.h>
+#include <osmocom/msc/msc_api.h>
 
 #include <osmocom/gsm/gsm48.h>
 #include <osmocom/gsm/gsm0480.h>
 #include <osmocom/gsm/gsm_utils.h>
 #include <osmocom/gsm/protocol/gsm_04_08.h>
 #include <osmocom/core/msgb.h>
+#include <osmocom/core/logging.h>
 #include <osmocom/core/talloc.h>
 #include <osmocom/core/utils.h>
 #include <osmocom/core/byteswap.h>
@@ -309,7 +311,10 @@ static int _mncc_recvmsg(const char *file, int line,
 	unsigned char *data;
 
 	mncc->msg_type = msg_type;
+	if (trans && trans->vsub)
+		log_set_context(LOG_CTX_VLR_SUBSCR, trans->vsub);
 	log_mncc_rx_tx(trans, "tx", (union mncc_msg *)mncc);
+	msc_api_trace_mncc(net, false, mncc, sizeof(*mncc));
 
 	msg = msgb_alloc(sizeof(struct gsm_mncc), "MNCC");
 	if (!msg)
@@ -2628,6 +2633,8 @@ int mncc_tx_to_cc(struct gsm_network *net, void *arg)
 {
 	const union mncc_msg *msg = arg;
 	struct mncc_call *mncc_call = NULL;
+
+	msc_api_trace_mncc(net, true, msg, sizeof(*msg));
 
 	if (msg->msg_type == MNCC_SETUP_REQ) {
 		/* Incoming call to forward for inter-MSC Handover? */

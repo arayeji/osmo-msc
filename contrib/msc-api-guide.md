@@ -368,3 +368,18 @@ Keep using separate list endpoints for Live / IMSI watch (`/api/subscribers/onli
 | Bulk calls | `GET /api/calls/active` |
 
 All list endpoints have a matching `/count` variant.
+
+---
+
+## IMSI trace packets
+
+`POST /api/trace/<IMSI>` writes DEBUG journal lines plus `PACKET:` dumps. Identity on the wire may be TMSI or MSISDN; the dump is still keyed by the traced IMSI (VLR lookup, no full VLR walk).
+
+| `proto=` | What it is | How it is matched |
+|----------|------------|-------------------|
+| `sgsap` | SGsAP | IMSI IE in the message |
+| `dtap` | A / Iu GSM 04.08 L3 (TMSI on RAN is fine) | VLR subscriber already bound to the connection |
+| `gsup` | HLR GSUP | IMSI in GSUP |
+| `mncc` | Call control toward SIP/ISUP (SETUP is the MSC-side IAM/INVITE) | MNCC IMSI, called/calling/connected MSISDN, or callref |
+
+OsmoMSC does not terminate SIP or ISUP. `proto=mncc` is the packet to show for those calls. Voice RTP frames are not dumped.

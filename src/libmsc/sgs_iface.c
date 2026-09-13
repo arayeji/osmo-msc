@@ -629,8 +629,15 @@ static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg)
 	if (imsi) {
 		const uint8_t *payload;
 		size_t plen;
+		struct vlr_subscr *vsub = NULL;
 
 		sgsap_msg_payload(msg, &payload, &plen);
+		if (gsm_network && gsm_network->vlr)
+			vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
+		if (vsub) {
+			log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
+			vlr_subscr_put(vsub, __func__);
+		}
 		msc_api_trace_packet(imsi, "sgsap", false, payload, plen);
 	}
 
@@ -1423,8 +1430,15 @@ int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg)
 	if (imsi[0]) {
 		const uint8_t *payload;
 		size_t plen;
+		struct vlr_subscr *vsub = NULL;
 
 		sgsap_msg_payload(msg, &payload, &plen);
+		if (gsm_network && gsm_network->vlr)
+			vsub = vlr_subscr_find_by_imsi(gsm_network->vlr, imsi, __func__);
+		if (vsub) {
+			log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
+			vlr_subscr_put(vsub, __func__);
+		}
 		msc_api_trace_packet(imsi, "sgsap", true, payload, plen);
 	}
 
