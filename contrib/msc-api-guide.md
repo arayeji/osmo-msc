@@ -294,7 +294,12 @@ Response (all fields optional for forward compatibility):
   "vlr": {
     "subscribers": 0,
     "online": 0,
-    "incomplete": 0
+    "incomplete": 0,
+    "incomplete_future": 0,
+    "incomplete_never": 0,
+    "incomplete_due": 0,
+    "incomplete_sgs_lu": 0,
+    "incomplete_discarded": 0
   },
   "network": {
     "active_ran_peers": 0,
@@ -335,6 +340,11 @@ Response (all fields optional for forward compatibility):
 | `vlr.subscribers` | int | Every VLR row (attached + leftovers) |
 | `vlr.online` | uint | Same as `online_subscribers` |
 | `vlr.incomplete` | uint | `vlr.subscribers - vlr.online` (clamped at 0). **Leak / wedge watch** |
+| `vlr.incomplete_future` | uint | Incomplete still inside the 10 min LU timer (in-flight or retried SGs LU) |
+| `vlr.incomplete_never` | uint | Incomplete with no expiry (open RAN conn, or detach leftover) |
+| `vlr.incomplete_due` | uint | Incomplete past expiry, waiting for the sweeper (max 4096/10s) |
+| `vlr.incomplete_sgs_lu` | uint | Incomplete still holding the SGs-LU use-count (HLR/MME LU in progress) |
+| `vlr.incomplete_discarded` | uint | Incomplete dropped on the last sweeper tick |
 | `network.active_ran_peers` | int | BSC/RNC links up |
 | `network.total_ran_peers_seen` | int | RAN peers ever seen |
 | `network.active_ss_ussd_sessions` | int | Active SS/USSD |

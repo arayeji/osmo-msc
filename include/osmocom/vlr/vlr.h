@@ -303,6 +303,16 @@ struct vlr_instance {
 	struct rate_ctr_group *ctrg;
 	/* lu_complete subscribers. /api/stats must not walk the list. */
 	unsigned int subscr_lu_complete;
+	/* Filled by the 10s expire walker (no extra VLR scan). */
+	struct {
+		unsigned int total;
+		unsigned int expire_future;
+		unsigned int expire_never;
+		unsigned int expire_due;
+		unsigned int sgs_lu;
+		unsigned int discarded;
+	} incomplete_snap;
+	unsigned int incomplete_snap_ticks;
 	/* A free-form pointer for use by the caller */
 	void *user_ctx;
 	/*! Optional callback for IMSI-scoped packet tracing (OsmoMSC API trace). */

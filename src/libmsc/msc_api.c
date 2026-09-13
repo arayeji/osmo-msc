@@ -713,6 +713,11 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 	int32_t vlr_subscribers = 0;
 	unsigned int online = 0;
 	unsigned int vlr_incomplete = 0;
+	unsigned int vlr_inc_future = 0;
+	unsigned int vlr_inc_never = 0;
+	unsigned int vlr_inc_due = 0;
+	unsigned int vlr_inc_sgs_lu = 0;
+	unsigned int vlr_inc_discarded = 0;
 	int32_t sms_pending = 0;
 	uint64_t sms_mt_attempted = 0;
 	uint64_t sms_mt_failed_paging = 0;
@@ -744,6 +749,13 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		vlr_incomplete = (unsigned int)(vlr_subscribers - (int32_t)online);
 	else
 		vlr_incomplete = 0;
+	if (net->vlr) {
+		vlr_inc_future = net->vlr->incomplete_snap.expire_future;
+		vlr_inc_never = net->vlr->incomplete_snap.expire_never;
+		vlr_inc_due = net->vlr->incomplete_snap.expire_due;
+		vlr_inc_sgs_lu = net->vlr->incomplete_snap.sgs_lu;
+		vlr_inc_discarded = net->vlr->incomplete_snap.discarded;
+	}
 
 	sms_statg = osmo_stat_item_get_group_by_name_idxname("sms_queue", NULL);
 	if (sms_statg)
@@ -782,7 +794,9 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		"\"active_calls\":%d,"
 		"\"online_subscribers\":%u,"
 		"\"sms_pending_queue\":%d,"
-		"\"vlr\":{\"subscribers\":%d,\"online\":%u,\"incomplete\":%u},"
+		"\"vlr\":{\"subscribers\":%d,\"online\":%u,\"incomplete\":%u,"
+		"\"incomplete_future\":%u,\"incomplete_never\":%u,\"incomplete_due\":%u,"
+		"\"incomplete_sgs_lu\":%u,\"incomplete_discarded\":%u},"
 		"\"network\":{"
 		"\"active_ran_peers\":%d,"
 		"\"total_ran_peers_seen\":%d,"
@@ -809,6 +823,11 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		vlr_subscribers,
 		online,
 		vlr_incomplete,
+		vlr_inc_future,
+		vlr_inc_never,
+		vlr_inc_due,
+		vlr_inc_sgs_lu,
+		vlr_inc_discarded,
 		ran_peers_active,
 		ran_peers_total,
 		active_nc_ss,

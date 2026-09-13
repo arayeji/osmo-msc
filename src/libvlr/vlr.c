@@ -894,9 +894,13 @@ void vlr_subscr_expire_lu(void *data)
 
 	/* Attached + dated expire_lu: full detach. Incomplete / no-expiry
 	 * leftovers: drop without HLR purge. detach() used to set
-	 * expire_lu=never on the first pass, so failed frees became immortal. */
+	 * expire_lu=never on the first pass, so failed frees became immortal.
+	 * Always finish the walk so incomplete_snap is a full census. */
 	{
 		unsigned int n = 0;
+		struct osmo_use_count_entry *ue;
+
+		memset(&vlr->incomplete_snap, 0, sizeof(vlr->incomplete_snap));
 
 		llist_for_each_entry_safe(vsub, vsub_tmp, &vlr->subscribers, list) {
 			bool due = (vsub->expire_lu != VLR_SUBSCRIBER_NO_EXPIRATION
@@ -904,19 +908,42 @@ void vlr_subscr_expire_lu(void *data)
 			bool stray = (!vsub->lu_complete
 				      && vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION);
 
+			if (!vsub->lu_complete) {
+				vlr->incomplete_snap.total++;
+				if (vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION)
+					vlr->incomplete_snap.expire_never++;
+				else if (vsub->expire_lu <= now.tv_sec)
+					vlr->incomplete_snap.expire_due++;
+				else
+					vlr->incomplete_snap.expire_future++;
+				ue = osmo_use_count_find(&vsub->use_count, VSUB_USE_SGS_LU);
+				if (ue && ue->count > 0)
+					vlr->incomplete_snap.sgs_lu++;
+			}
+
 			if (!due && !stray)
+				continue;
+			if (n >= VLR_EXPIRE_MAX_PER_TICK)
 				continue;
 
 			LOGVLR(LOGL_DEBUG, "%s: %s\n", vlr_subscr_name(vsub),
 			       vsub->lu_complete ? "Location Update expired" : "discarding incomplete VLR record");
 			vlr_rate_ctr_inc(vlr, VLR_CTR_DETACH_BY_T3212);
-			if (vsub->lu_complete)
+			if (vsub->lu_complete) {
 				vlr_subscr_detach(vsub);
-			else
+			} else {
 				vlr_subscr_discard_incomplete(vsub);
-			if (++n >= VLR_EXPIRE_MAX_PER_TICK)
-				break;
+				vlr->incomplete_snap.discarded++;
+			}
+			n++;
 		}
+		vlr->incomplete_snap_ticks++;
+		if (vlr->incomplete_snap.total >= 1000 && (vlr->incomplete_snap_ticks % 6) == 0)
+			LOGVLR(LOGL_NOTICE,
+			       "VLR incomplete leftover: total=%u future=%u never=%u due=%u sgs_lu=%u discarded=%u\n",
+			       vlr->incomplete_snap.total, vlr->incomplete_snap.expire_future,
+			       vlr->incomplete_snap.expire_never, vlr->incomplete_snap.expire_due,
+			       vlr->incomplete_snap.sgs_lu, vlr->incomplete_snap.discarded);
 	}
 
 done:
