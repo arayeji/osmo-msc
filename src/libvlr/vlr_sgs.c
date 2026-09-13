@@ -165,7 +165,7 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 			if (x3212_secs)
 				vsub->expire_lu = now.tv_sec + x3212_secs;
 			else if (!vsub->lu_complete)
-				vsub->expire_lu = now.tv_sec + 600;
+				vsub->expire_lu = now.tv_sec + VLR_INCOMPLETE_LU_SECS;
 		}
 	}
 

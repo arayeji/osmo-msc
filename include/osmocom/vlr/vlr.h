@@ -22,7 +22,9 @@ struct log_target;
 struct osmo_mobile_identity;
 
 #define VLR_SUBSCRIBER_NO_EXPIRATION	0
-#define VLR_SUBSCRIBER_LU_EXPIRATION_INTERVAL	60	/* in seconds */
+#define VLR_SUBSCRIBER_LU_EXPIRATION_INTERVAL	10	/* in seconds */
+#define VLR_INCOMPLETE_LU_SECS		600
+#define VLR_EXPIRE_MAX_PER_TICK		4096
 
 #define VSUB_USE_ATTACHED "attached"
 

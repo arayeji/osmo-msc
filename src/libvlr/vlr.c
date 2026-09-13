@@ -185,6 +185,7 @@ static const struct rate_ctr_group_desc vlr_ctrg_desc = {
  ***********************************************************************/
 
 static int vlr_subscr_detach(struct vlr_subscr *vsub);
+static void vlr_subscr_discard_incomplete(struct vlr_subscr *vsub);
 
 const struct value_string vlr_ciph_names[] = {
 	OSMO_VALUE_STRING(VLR_CIPH_NONE),
@@ -467,6 +468,11 @@ static struct vlr_subscr *_vlr_subscr_alloc(struct vlr_instance *vlr)
 		},
 		.expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION,
 	};
+	{
+		struct timespec now;
+		if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
+			vsub->expire_lu = now.tv_sec + VLR_INCOMPLETE_LU_SECS;
+	}
 	osmo_use_count_make_static_entries(&vsub->use_count, vsub->use_count_buf, ARRAY_SIZE(vsub->use_count_buf));
 
 	for (i = 0; i < ARRAY_SIZE(vsub->auth_tuples); i++)
@@ -886,19 +892,29 @@ void vlr_subscr_expire_lu(void *data)
 		goto done;
 	}
 
-	/* Always reap dated expire_lu (incomplete SGs LUs). T3212/X3212=0
-	 * only means attached UEs stay; do not skip the walk entirely. */
+	/* Attached + dated expire_lu: full detach. Incomplete / no-expiry
+	 * leftovers: drop without HLR purge. detach() used to set
+	 * expire_lu=never on the first pass, so failed frees became immortal. */
 	{
 		unsigned int n = 0;
 
 		llist_for_each_entry_safe(vsub, vsub_tmp, &vlr->subscribers, list) {
-			if (vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION || vsub->expire_lu > now.tv_sec)
+			bool due = (vsub->expire_lu != VLR_SUBSCRIBER_NO_EXPIRATION
+				    && vsub->expire_lu <= now.tv_sec);
+			bool stray = (!vsub->lu_complete
+				      && vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION);
+
+			if (!due && !stray)
 				continue;
 
-			LOGVLR(LOGL_DEBUG, "%s: Location Update expired\n", vlr_subscr_name(vsub));
+			LOGVLR(LOGL_DEBUG, "%s: %s\n", vlr_subscr_name(vsub),
+			       vsub->lu_complete ? "Location Update expired" : "discarding incomplete VLR record");
 			vlr_rate_ctr_inc(vlr, VLR_CTR_DETACH_BY_T3212);
-			vlr_subscr_detach(vsub);
-			if (++n >= 512)
+			if (vsub->lu_complete)
+				vlr_subscr_detach(vsub);
+			else
+				vlr_subscr_discard_incomplete(vsub);
+			if (++n >= VLR_EXPIRE_MAX_PER_TICK)
 				break;
 		}
 	}
@@ -1643,6 +1659,20 @@ bool vlr_subscr_expire(struct vlr_subscr *vsub)
 	}
 
 	return false;
+}
+
+/* Drop a VLR row that never completed LU. Do not Purge MS — these records
+ * were never attached. Full detach() also cleared expire_lu, so a leftover
+ * use-count made them immortal. */
+static void vlr_subscr_discard_incomplete(struct vlr_subscr *vsub)
+{
+	vlr_subscr_get(vsub, __func__);
+	vlr_subscr_cancel_attach_fsm(vsub, OSMO_FSM_TERM_ERROR, GSM48_REJECT_CONGESTION);
+	vlr_sgs_lu_release(vsub);
+	vlr_sgs_pag_stop(vsub);
+	vsub->imsi_detached_flag = true;
+	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_DETACH_IND_FROM_UE, NULL);
+	vlr_subscr_put(vsub, __func__);
 }
 
 static int vlr_subscr_detach(struct vlr_subscr *vsub)
