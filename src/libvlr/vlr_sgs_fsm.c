@@ -300,7 +300,10 @@ static void sgs_ue_fsm_allstate(struct osmo_fsm_inst *fi, uint32_t event, void *
 	case SGS_UE_E_RX_DETACH_IND_FROM_MME:
 	case SGS_UE_E_RX_DETACH_IND_FROM_UE:
 		vsub->imsi_detached_flag = true;
-		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+		if (vsub->lu_complete)
+			vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
+		else
+			vlr_subscr_keep_incomplete_expiry(vsub);
 		/* See 5.4.3 and 5.5.3 */
 		to_null(fi);
 		break;

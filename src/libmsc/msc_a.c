@@ -584,7 +584,7 @@ static void msc_a_fsm_authenticated_enter(struct osmo_fsm_inst *fi, uint32_t pre
 	 * Otherwise we would kick the subscriber off the network when the timer
 	 * expires e.g. during a long phone call.
 	 * The LU expiry timer will restart once the connection is closed. */
-	if (vsub)
+	if (vsub && vsub->lu_complete)
 		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
 
 	evaluate_acceptance_outcome(fi, true);

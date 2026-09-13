@@ -299,7 +299,8 @@ Response (all fields optional for forward compatibility):
     "incomplete_never": 0,
     "incomplete_due": 0,
     "incomplete_sgs_lu": 0,
-    "incomplete_discarded": 0
+    "incomplete_discarded": 0,
+    "incomplete_held": 0
   },
   "network": {
     "active_ran_peers": 0,
@@ -345,6 +346,7 @@ Response (all fields optional for forward compatibility):
 | `vlr.incomplete_due` | uint | Incomplete past expiry, waiting for the sweeper (max 4096/10s) |
 | `vlr.incomplete_sgs_lu` | uint | Incomplete still holding the SGs-LU use-count (HLR/MME LU in progress) |
 | `vlr.incomplete_discarded` | uint | Incomplete dropped on the last sweeper tick |
+| `vlr.incomplete_held` | uint | Discard ran but a leftover use-count kept the row |
 | `network.active_ran_peers` | int | BSC/RNC links up |
 | `network.total_ran_peers_seen` | int | RAN peers ever seen |
 | `network.active_ss_ussd_sessions` | int | Active SS/USSD |

@@ -311,6 +311,7 @@ struct vlr_instance {
 		unsigned int expire_due;
 		unsigned int sgs_lu;
 		unsigned int discarded;
+		unsigned int held;
 	} incomplete_snap;
 	unsigned int incomplete_snap_ticks;
 	/* A free-form pointer for use by the caller */
@@ -480,6 +481,7 @@ void vlr_subscr_cancel_attach_fsm(struct vlr_subscr *vsub,
 				  enum gsm48_reject_value gsm48_cause);
 
 void vlr_subscr_enable_expire_lu(struct vlr_subscr *vsub);
+void vlr_subscr_keep_incomplete_expiry(struct vlr_subscr *vsub);
 
 /* Process Access Request FSM */
 

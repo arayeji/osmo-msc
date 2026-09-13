@@ -878,6 +878,18 @@ void vlr_subscr_enable_expire_lu(struct vlr_subscr *vsub)
 	}
 }
 
+/* Incomplete rows must not get expire_lu=never: the sweeper cannot
+ * drop them, and leftover use-counts make them immortal. */
+void vlr_subscr_keep_incomplete_expiry(struct vlr_subscr *vsub)
+{
+	struct timespec now;
+
+	if (!vsub || vsub->lu_complete)
+		return;
+	if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
+		vsub->expire_lu = now.tv_sec + VLR_INCOMPLETE_LU_SECS;
+}
+
 void vlr_subscr_expire_lu(void *data)
 {
 	struct vlr_instance *vlr = data;
@@ -940,10 +952,11 @@ void vlr_subscr_expire_lu(void *data)
 		vlr->incomplete_snap_ticks++;
 		if (vlr->incomplete_snap.total >= 1000 && (vlr->incomplete_snap_ticks % 6) == 0)
 			LOGVLR(LOGL_NOTICE,
-			       "VLR incomplete leftover: total=%u future=%u never=%u due=%u sgs_lu=%u discarded=%u\n",
+			       "VLR incomplete leftover: total=%u future=%u never=%u due=%u sgs_lu=%u discarded=%u held=%u\n",
 			       vlr->incomplete_snap.total, vlr->incomplete_snap.expire_future,
 			       vlr->incomplete_snap.expire_never, vlr->incomplete_snap.expire_due,
-			       vlr->incomplete_snap.sgs_lu, vlr->incomplete_snap.discarded);
+			       vlr->incomplete_snap.sgs_lu, vlr->incomplete_snap.discarded,
+			       vlr->incomplete_snap.held);
 	}
 
 done:
@@ -1698,13 +1711,23 @@ static void vlr_subscr_discard_incomplete(struct vlr_subscr *vsub)
 	vlr_sgs_lu_release(vsub);
 	vlr_sgs_pag_stop(vsub);
 	vsub->imsi_detached_flag = true;
-	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_DETACH_IND_FROM_UE, NULL);
+	/* Do not dispatch SGs DETACH here: that path used to set
+	 * expire_lu=never and leftover uses became immortal. */
+	if (osmo_use_count_total(&vsub->use_count) > 1) {
+		if (vsub->vlr)
+			vsub->vlr->incomplete_snap.held++;
+		LOGVLR(LOGL_DEBUG, "incomplete discard still used by %s\n",
+		       osmo_use_count_to_str_c(OTC_SELECT, &vsub->use_count));
+		vlr_subscr_keep_incomplete_expiry(vsub);
+	}
 	vlr_subscr_put(vsub, __func__);
 }
 
 static int vlr_subscr_detach(struct vlr_subscr *vsub)
 {
 	int rc = 0;
+
+	vlr_subscr_get(vsub, __func__);
 
 	/* paranoia: should any LU or PARQ FSMs still be running, stop them. */
 	vlr_subscr_cancel_attach_fsm(vsub, OSMO_FSM_TERM_ERROR, GSM48_REJECT_CONGESTION);
@@ -1714,12 +1737,14 @@ static int vlr_subscr_detach(struct vlr_subscr *vsub)
 		rc = vlr_subscr_purge(vsub);
 
 	vsub->imsi_detached_flag = true;
-	vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
 
 	/* Inform the UE-SGs FSM that the subscriber has been detached */
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_DETACH_IND_FROM_UE, NULL);
 
 	vlr_subscr_expire(vsub);
+	/* expire() may have dropped lu_complete while uses remain. */
+	vlr_subscr_keep_incomplete_expiry(vsub);
+	vlr_subscr_put(vsub, __func__);
 
 	return rc;
 }
