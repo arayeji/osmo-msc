@@ -164,8 +164,15 @@ int vlr_sgs_loc_update(struct vlr_instance *vlr, struct vlr_sgs_cfg *cfg,
 		if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
 			if (x3212_secs)
 				vsub->expire_lu = now.tv_sec + x3212_secs;
-			else if (!vsub->lu_complete)
-				vsub->expire_lu = now.tv_sec + VLR_INCOMPLETE_LU_SECS;
+			else if (!vsub->lu_complete) {
+				time_t deadline = now.tv_sec + VLR_INCOMPLETE_LU_SECS;
+				/* Do not refresh on every LU retry: that kept
+				 * failed SGs LUs incomplete forever. */
+				if (vsub->expire_lu == VLR_SUBSCRIBER_NO_EXPIRATION)
+					vsub->expire_lu = deadline;
+				else if (vsub->expire_lu > deadline)
+					vsub->expire_lu = deadline;
+			}
 		}
 	}
 
