@@ -61,6 +61,8 @@ struct osmo_tdef msc_tdefs_utran[] = {
 };
 
 struct osmo_tdef msc_tdefs_sgs[] = {
+	{ .T = -1, .default_val = 5, .desc = "SGs connection Complete Layer 3 timeout" },
+	{ .T = -2, .default_val = 30, .desc = "SGs connection release sanity timeout" },
 	{ .T = -4, .default_val = 10, .desc = "Paging response timeout" },
 	{}
 };

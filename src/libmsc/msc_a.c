@@ -981,11 +981,63 @@ static void msc_a_fsm_communicating(struct osmo_fsm_inst *fi, uint32_t event, vo
 	}
 }
 
+/* Tokens that must not keep a RELEASED conn on msub_list. SGs has no
+ * Clear-Complete, and SMS/MMTS/USSD were omitted from the original list —
+ * leftover sms_mmts after a torn-down MT SMS left tens of thousands of
+ * EUTRAN-SGs zombies (RELEASED forever, T=-2 then no-op). */
+static void msc_a_cancel_release_uses(struct msc_a *msc_a)
+{
+	static const char *const uses[] = {
+		MSC_A_USE_LOCATION_UPDATING,
+		MSC_A_USE_CM_SERVICE_CC,
+		MSC_A_USE_CM_SERVICE_SMS,
+		MSC_A_USE_CM_SERVICE_SS,
+		MSC_A_USE_CM_SERVICE_GCC,
+		MSC_A_USE_CM_SERVICE_BCC,
+		MSC_A_USE_PAGING_RESPONSE,
+		MSC_A_USE_SMS,
+		MSC_A_USE_SMS_MMTS,
+		MSC_A_USE_NC_SS,
+		MSC_A_USE_WAIT_CLEAR_COMPLETE,
+	};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(uses); i++) {
+		const char *use = uses[i];
+		int32_t count = osmo_use_count_by(&msc_a->use_count, use);
+
+		if (!count)
+			continue;
+		LOG_MSC_A(msc_a, LOGL_DEBUG, "Releasing: canceling still pending use: %s (%d)\n",
+			  use, count);
+		osmo_use_count_get_put(&msc_a->use_count, use, -count);
+	}
+}
+
 static int msc_a_fsm_timer_cb(struct osmo_fsm_inst *fi)
 {
 	struct msc_a *msc_a = fi->priv;
+
 	if (msc_a_in_release(msc_a)) {
 		LOG_MSC_A(msc_a, LOGL_ERROR, "Timeout while releasing, discarding right now\n");
+		if (fi->state == MSC_A_ST_RELEASED) {
+			/* Hold one use so the last leftover put cannot free us mid-loop. */
+			msc_a_get(msc_a, __func__);
+			msc_a_cancel_release_uses(msc_a);
+			if (osmo_use_count_total(&msc_a->use_count) > 1) {
+				char buf[128];
+
+				LOG_MSC_A(msc_a, LOGL_ERROR,
+					  "RELEASED timeout with leftover use %s, forcing term\n",
+					  osmo_use_count_name_buf(buf, sizeof(buf), &msc_a->use_count));
+				msc_a_put(msc_a, __func__);
+				osmo_fsm_inst_term(fi, OSMO_FSM_TERM_ERROR, fi);
+				return 0;
+			}
+			/* Last put → UNUSED → term. Do not touch fi after this. */
+			msc_a_put(msc_a, __func__);
+			return 0;
+		}
 		msc_a_put_all(msc_a, MSC_A_USE_WAIT_CLEAR_COMPLETE);
 		msc_a_state_chg(msc_a, MSC_A_ST_RELEASED);
 	} else {
@@ -999,17 +1051,7 @@ static void msc_a_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_
 {
 	struct msc_a *msc_a = fi->priv;
 	struct vlr_subscr *vsub = msc_a_vsub(msc_a);
-	int i;
 	char buf[128];
-	const char * const use_counts_to_cancel[] = {
-		MSC_A_USE_LOCATION_UPDATING,
-		MSC_A_USE_CM_SERVICE_CC,
-		MSC_A_USE_CM_SERVICE_SMS,
-		MSC_A_USE_CM_SERVICE_SS,
-		MSC_A_USE_CM_SERVICE_GCC,
-		MSC_A_USE_CM_SERVICE_BCC,
-		MSC_A_USE_PAGING_RESPONSE,
-	};
 
 	LOG_MSC_A(msc_a, LOGL_DEBUG, "Releasing: msc_a use is %s\n",
 		  osmo_use_count_name_buf(buf, sizeof(buf), &msc_a->use_count));
@@ -1035,15 +1077,9 @@ static void msc_a_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_
 	/* If we're closing in a middle of a trans, we need to clean up */
 	trans_conn_closed(msc_a);
 
-	/* Cancel use counts for pending CM Service / Paging */
-	for (i = 0; i < ARRAY_SIZE(use_counts_to_cancel); i++) {
-		const char *use = use_counts_to_cancel[i];
-		int32_t count = osmo_use_count_by(&msc_a->use_count, use);
-		if (!count)
-			continue;
-		LOG_MSC_A(msc_a, LOGL_DEBUG, "Releasing: canceling still pending use: %s (%d)\n", use, count);
-		osmo_use_count_get_put(&msc_a->use_count, use, -count);
-	}
+	/* Cancel leftover CM Service / Paging / SMS / SS uses so SGs
+	 * (no Clear-Complete) can reach use_count 0 and leave msub_list. */
+	msc_a_cancel_release_uses(msc_a);
 
 	if (msc_a->c.ran->type == OSMO_RAT_EUTRAN_SGS) {
 		if (vsub)

@@ -1466,6 +1466,20 @@ int gsm0411_rcv_sms(struct msc_a *msc_a, struct msgb *msg)
 	return rc;
 }
 
+/* Current trans is already unlinked from trans_list in trans_free(). */
+static bool gsm411_other_sms_trans_on_conn(const struct gsm_trans *self)
+{
+	struct gsm_trans *t;
+
+	if (!self->net || !self->msc_a)
+		return false;
+	llist_for_each_entry(t, &self->net->trans_list, entry) {
+		if (t != self && t->type == TRANS_SMS && t->msc_a == self->msc_a)
+			return true;
+	}
+	return false;
+}
+
 void _gsm411_sms_trans_free(struct gsm_trans *trans)
 {
 	/* Disconnect callbacks first. gsm411_smc_clear() may emit
@@ -1504,6 +1518,12 @@ void _gsm411_sms_trans_free(struct gsm_trans *trans)
 						  NULL, 0 /* SM-RP-UI */);
 		}
 	}
+
+	/* MMTS is taken once per conn, not per trans. trans_free only puts
+	 * MSC_A_USE_SMS, so a torn-down multipart MT SMS left sms_mmts and
+	 * the SGs conn stuck in RELEASED on msub_list. */
+	if (trans->msc_a && !gsm411_other_sms_trans_on_conn(trans))
+		msc_a_put_all(trans->msc_a, MSC_A_USE_SMS_MMTS);
 }
 
 /* Process incoming SAPI N-REJECT from BSC */
