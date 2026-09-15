@@ -271,6 +271,8 @@ struct vlr_ops {
 	void (*sgs_assoc_persist)(struct vlr_subscr *vsub);
 	/* optional: drop persisted SGs association (detach / expire / HLR cancel) */
 	void (*sgs_assoc_forget)(const char *imsi);
+	/* optional: GSUP/HLR (IWF) link came up or dropped */
+	void (*gsup_link_changed)(struct vlr_instance *vlr, bool up);
 };
 
 /* An instance of the VLR codebase */
@@ -287,6 +289,9 @@ struct vlr_instance {
 	struct gsup_client_mux *gcm;
 	struct vlr_ops ops;
 	struct osmo_timer_list lu_expire_timer;
+	/* Fail in-flight LUs after IWF/HLR GSUP drop, a few per tick. */
+	struct osmo_timer_list gsup_fail_timer;
+	bool gsup_link_up;
 	struct {
 		bool retrieve_imeisv_early;
 		bool retrieve_imeisv_ciphered;
@@ -363,6 +368,7 @@ int vlr_subscr_rx_imsi_detach(struct vlr_subscr *vsub);
 struct vlr_instance *vlr_alloc(void *ctx, const struct vlr_ops *ops, bool is_ps);
 int vlr_start(struct vlr_instance *vlr, struct gsup_client_mux *gcm);
 int vlr_gsup_rx(struct gsup_client_mux *gcm, void *data, const struct osmo_gsup_message *gsup_msg);
+bool vlr_gsup_is_up(const struct vlr_instance *vlr);
 
 static inline bool vlr_is_cs(struct vlr_instance *vlr) { return !vlr->cfg.is_ps; };
 static inline bool vlr_is_ps(struct vlr_instance *vlr) { return vlr->cfg.is_ps; };

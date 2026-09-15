@@ -52,6 +52,10 @@
 
 #define SGSN_SUBSCR_MAX_RETRIES 3
 #define SGSN_SUBSCR_RETRY_INTERVAL 10
+#define VLR_GSUP_FAIL_MAX_PER_TICK 256
+
+static struct vlr_instance *g_vlr;
+static osmo_gsup_client_up_down_cb_t g_prev_gsup_up_down;
 
 enum vlr_stat_item_idx {
 	VLR_STAT_SUBSCRIBER_COUNT,
@@ -1834,10 +1838,104 @@ err_free:
 	return NULL;
 }
 
+bool vlr_gsup_is_up(const struct vlr_instance *vlr)
+{
+	if (!vlr || !vlr->gcm || !vlr->gcm->gsup_client)
+		return false;
+	return osmo_gsup_client_is_connected(vlr->gcm->gsup_client);
+}
+
+static void vlr_gsup_fail_pending_cb(void *data)
+{
+	struct vlr_instance *vlr = data;
+	struct vlr_subscr *vsub, *tmp;
+	unsigned int n = 0;
+	bool more = false;
+
+	/* IWF came back mid-drain: leave remaining LUs for the new GSUP. */
+	if (vlr_gsup_is_up(vlr))
+		return;
+
+	llist_for_each_entry_safe(vsub, tmp, &vlr->subscribers, list) {
+		bool sgs_wait = vsub->sgs_fsm
+				&& vsub->sgs_fsm->state == SGS_UE_ST_LA_UPD_PRES
+				&& vsub->sgs.response_cb;
+		bool ran_wait = vsub->lu_fsm != NULL;
+
+		if (!sgs_wait && !ran_wait)
+			continue;
+		if (n >= VLR_GSUP_FAIL_MAX_PER_TICK) {
+			more = true;
+			break;
+		}
+
+		vlr_subscr_get(vsub, __func__);
+		if (sgs_wait) {
+			struct sgs_lu_response r = {
+				.accepted = false,
+				.error = false,
+				.cause = GSM48_REJECT_NETWORK_FAILURE,
+				.vsub = vsub,
+			};
+			vsub->sgs.response_cb(&r);
+		}
+		if (vsub->lu_fsm)
+			vlr_subscr_cancel_attach_fsm(vsub, OSMO_FSM_TERM_ERROR,
+						     GSM48_REJECT_NETWORK_FAILURE);
+		vlr_subscr_keep_incomplete_expiry(vsub);
+		vlr_subscr_put(vsub, __func__);
+		n++;
+	}
+
+	if (n)
+		LOGVLR(LOGL_NOTICE, "GSUP down: failed %u in-flight LU%s\n",
+		       n, more ? " (more pending)" : "");
+	if (more)
+		osmo_timer_schedule(&vlr->gsup_fail_timer, 0, 20000);
+}
+
+static void vlr_gsup_on_up(struct vlr_instance *vlr)
+{
+	osmo_timer_del(&vlr->gsup_fail_timer);
+	if (vlr->gsup_link_up)
+		return;
+	vlr->gsup_link_up = true;
+	LOGVLR(LOGL_NOTICE, "GSUP link to HLR/IWF is up\n");
+	if (vlr->ops.gsup_link_changed)
+		vlr->ops.gsup_link_changed(vlr, true);
+}
+
+static void vlr_gsup_on_down(struct vlr_instance *vlr)
+{
+	if (!vlr->gsup_link_up && osmo_timer_pending(&vlr->gsup_fail_timer))
+		return;
+	vlr->gsup_link_up = false;
+	LOGVLR(LOGL_NOTICE, "GSUP link to HLR/IWF is down; failing in-flight LUs\n");
+	if (vlr->ops.gsup_link_changed)
+		vlr->ops.gsup_link_changed(vlr, false);
+	osmo_timer_schedule(&vlr->gsup_fail_timer, 0, 0);
+}
+
+static bool vlr_gsup_up_down_cb(struct osmo_gsup_client *gsupc, bool up)
+{
+	bool keep = true;
+
+	if (g_prev_gsup_up_down)
+		keep = g_prev_gsup_up_down(gsupc, up);
+	if (!g_vlr)
+		return keep;
+	if (up)
+		vlr_gsup_on_up(g_vlr);
+	else
+		vlr_gsup_on_down(g_vlr);
+	return keep;
+}
+
 int vlr_start(struct vlr_instance *vlr, struct gsup_client_mux *gcm)
 {
 	OSMO_ASSERT(vlr);
 
+	g_vlr = vlr;
 	vlr->gcm = gcm;
 	gcm->rx_cb[OSMO_GSUP_MESSAGE_CLASS_SUBSCRIBER_MANAGEMENT] = (struct gsup_client_mux_rx_cb){
 		.func = vlr_gsup_rx,
@@ -1846,6 +1944,16 @@ int vlr_start(struct vlr_instance *vlr, struct gsup_client_mux *gcm)
 
 	osmo_timer_setup(&vlr->lu_expire_timer, vlr_subscr_expire_lu, vlr);
 	osmo_timer_schedule(&vlr->lu_expire_timer, VLR_SUBSCRIBER_LU_EXPIRATION_INTERVAL, 0);
+	osmo_timer_setup(&vlr->gsup_fail_timer, vlr_gsup_fail_pending_cb, vlr);
+
+	/* gsup_client_mux_start() does not expose up_down_cb. Hook after
+	 * create so an IWF crash fails waiting LUs instead of leaking them. */
+	if (gcm->gsup_client) {
+		g_prev_gsup_up_down = gcm->gsup_client->up_down_cb;
+		gcm->gsup_client->up_down_cb = vlr_gsup_up_down_cb;
+		if (osmo_gsup_client_is_connected(gcm->gsup_client))
+			vlr->gsup_link_up = true;
+	}
 	return 0;
 }
 

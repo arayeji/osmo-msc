@@ -290,6 +290,7 @@ Response (all fields optional for forward compatibility):
   "timestamp": "2026-06-26T12:00:00Z",
   "active_calls": 0,
   "online_subscribers": 0,
+  "gsup_connected": true,
   "sms_pending_queue": 0,
   "vlr": {
     "subscribers": 0,
@@ -337,6 +338,7 @@ Response (all fields optional for forward compatibility):
 | `timestamp` | string (UTC ISO-8601) | Sample time |
 | `active_calls` | int | Live CS calls |
 | `online_subscribers` | uint | Attached (LU complete). Same as `vlr.online` and `/api/subscribers/online/count` |
+| `gsup_connected` | bool | GSUP/IWF (HLR) link. False after IWF crash until IPA reconnects |
 | `sms_pending_queue` | int | MT SMS waiting in RAM |
 | `vlr.subscribers` | int | Every VLR row (attached + leftovers) |
 | `vlr.online` | uint | Same as `online_subscribers` |
@@ -361,7 +363,7 @@ Response (all fields optional for forward compatibility):
 | `calls.mo_setup` | uint | MO call setups |
 | `calls.reached_active` | uint | Calls that reached active |
 
-**NMS leak alert:** prefer `vlr.incomplete_never` (must stay ~0) and `vlr.incomplete_held`. `vlr.incomplete` / `incomplete_future` are in-flight LU; warn if they keep rising while `vlr.online` is flat, or if `incomplete` goes above ~10 000. The Friday wedge was ~800 000+.
+**NMS leak alert:** prefer `vlr.incomplete_never` (must stay ~0) and `vlr.incomplete_held`. `vlr.incomplete` / `incomplete_future` are in-flight LU; warn if they keep rising while `vlr.online` is flat, or if `incomplete` goes above ~10 000. The Friday wedge was ~800 000+. Alert if `gsup_connected` is false (IWF/HLR down): SGs LUs will reject until it returns.
 
 Poll **only** `GET /api/stats` for gauges. Do not poll `/api/subscribers/online` without `?imsi=` (full dump is rejected and used to stall the MSC).
 

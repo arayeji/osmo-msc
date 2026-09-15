@@ -1699,6 +1699,12 @@ static void msc_vlr_subscr_inval(void *msc_conn_ref, struct vlr_subscr *vsub, en
 	trans_free_for_vsub(vsub);
 }
 
+static void msc_vlr_gsup_link_changed(struct vlr_instance *vlr, bool up)
+{
+	(void)vlr;
+	sgs_gsup_link_changed(up);
+}
+
 /* operations that we need to implement for libvlr */
 const struct vlr_ops msc_vlr_ops = {
 	.tx_auth_req = msc_vlr_tx_auth_req,
@@ -1716,6 +1722,7 @@ const struct vlr_ops msc_vlr_ops = {
 	.subscr_inval = msc_vlr_subscr_inval,
 	.sgs_assoc_persist = msc_vlr_sgs_assoc_persist,
 	.sgs_assoc_forget = msc_vlr_sgs_assoc_forget,
+	.gsup_link_changed = msc_vlr_gsup_link_changed,
 };
 
 struct msgb *gsm48_create_mm_serv_rej(enum gsm48_reject_value value)

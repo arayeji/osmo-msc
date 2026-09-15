@@ -104,4 +104,5 @@ int sgs_iface_paging_cb(struct vlr_subscr *vsub, enum sgsap_service_ind serv_ind
 int sgs_iface_tx_dtap_ud(struct msc_a *msc_a, struct msgb *msg);
 void sgs_iface_tx_release(struct vlr_subscr *vsub);
 void sgs_iface_tx_serv_abrt(struct vlr_subscr *vsub);
+void sgs_gsup_link_changed(bool up);
 

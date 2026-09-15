@@ -399,7 +399,7 @@ static void sgs_mme_maybe_vlr_reset(struct sgs_mme_ctx *mme)
 	 * GSUP is down — every LU fails and used to RESET again. */
 	if (!sgs_gsup_is_up()) {
 		LOGMME(mme, LOGL_NOTICE,
-		       "VLR reset deferred: GSUP not connected\n");
+		       "VLR reset deferred: GSUP/IWF not connected\n");
 		return;
 	}
 
@@ -493,6 +493,22 @@ static int sgs_mme_fqdn_received(struct sgs_connection *sgc, const char *mme_fqd
 
 	sgs_mme_maybe_vlr_reset(mme);
 	return 0;
+}
+
+void sgs_gsup_link_changed(bool up)
+{
+	struct sgs_mme_ctx *mme;
+
+	if (!g_sgs)
+		return;
+	if (!up) {
+		LOGP(DSGS, LOGL_NOTICE,
+		     "GSUP/IWF down: new SGs LUs rejected until the link returns\n");
+		return;
+	}
+	LOGP(DSGS, LOGL_NOTICE, "GSUP/IWF up: retrying any deferred VLR reset\n");
+	llist_for_each_entry(mme, &g_sgs->mme_list, entry)
+		sgs_mme_maybe_vlr_reset(mme);
 }
 
 /* Safely get the mme-name for an sgs-connection */
@@ -988,8 +1004,14 @@ static int sgs_rx_loc_upd_req(struct sgs_connection *sgc, struct msgb *msg, cons
 	struct vlr_subscr *vsub;
 	struct osmo_plmn_id last_eutran_plmn_buf, *last_eutran_plmn = NULL;
 
-	if (!sgs_gsup_is_up()) {
-		resp = gsm29118_create_lu_rej(imsi, GSM48_REJECT_NETWORK_FAILURE, NULL);
+	/* GSUP/IWF down, or too many LUs already waiting on HLR: reject
+	 * this one so the MME retries later instead of growing leftovers. */
+	if (!sgs_gsup_is_up()
+	    || (gsm_network->vlr && gsm_network->vlr->incomplete_snap.sgs_lu >= 4096)) {
+		resp = gsm29118_create_lu_rej(imsi,
+					      sgs_gsup_is_up() ? GSM48_REJECT_CONGESTION
+							       : GSM48_REJECT_NETWORK_FAILURE,
+					      NULL);
 		sgs_tx(sgc, resp);
 		return 0;
 	}

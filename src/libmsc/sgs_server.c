@@ -197,7 +197,9 @@ static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 	/* Bound the drain so LU/paging TX can leave the stream queue.
 	 * A full drain of a burst never returned to poll(), so POLLOUT
 	 * never ran and osmo_stream_srv logged "tx queue full". */
-#define SGS_RX_MAX_PER_WAKE 32
+	/* Keep this small so GSUP IPA ping/pong is read. A large drain
+	 * starved the IWF socket (Recv-Q + ping timeout + reconnect). */
+#define SGS_RX_MAX_PER_WAKE 8
 	unsigned int n = 0;
 
 	for (;;) {

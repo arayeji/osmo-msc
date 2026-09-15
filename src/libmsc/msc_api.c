@@ -719,6 +719,7 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 	unsigned int vlr_inc_sgs_lu = 0;
 	unsigned int vlr_inc_discarded = 0;
 	unsigned int vlr_inc_held = 0;
+	bool gsup_up = false;
 	int32_t sms_pending = 0;
 	uint64_t sms_mt_attempted = 0;
 	uint64_t sms_mt_failed_paging = 0;
@@ -746,6 +747,7 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 	if (net->vlr && net->vlr->statg)
 		vlr_subscribers = api_stat_item_value(net->vlr->statg, "subscribers");
 	online = net->vlr ? net->vlr->subscr_lu_complete : 0;
+	gsup_up = vlr_gsup_is_up(net->vlr);
 	if (vlr_subscribers > (int32_t)online)
 		vlr_incomplete = (unsigned int)(vlr_subscribers - (int32_t)online);
 	else
@@ -795,6 +797,7 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		"{\"timestamp\":\"%s\","
 		"\"active_calls\":%d,"
 		"\"online_subscribers\":%u,"
+		"\"gsup_connected\":%s,"
 		"\"sms_pending_queue\":%d,"
 		"\"vlr\":{\"subscribers\":%d,\"online\":%u,\"incomplete\":%u,"
 		"\"incomplete_future\":%u,\"incomplete_never\":%u,\"incomplete_due\":%u,"
@@ -821,6 +824,7 @@ static char *api_json_stats(void *ctx, struct gsm_network *net)
 		json_escape(ctx, ts),
 		active_calls,
 		online,
+		gsup_up ? "true" : "false",
 		sms_pending,
 		vlr_subscribers,
 		online,
