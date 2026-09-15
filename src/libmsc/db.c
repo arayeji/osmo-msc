@@ -78,7 +78,7 @@ static int db_run_statements(struct db_context *dbc, const char **statements, si
  * DATABASE SCHEMA AND MIGRATION
  ***********************************************************************/
 
-#define SCHEMA_REVISION "7"
+#define SCHEMA_REVISION "8"
 
 enum {
 	SCHEMA_META,
@@ -96,6 +96,7 @@ enum {
 	SCHEMA_AUTHLAST,
 	SCHEMA_SGS_ASSOC,
 	SCHEMA_SGS_ASSOC_IDX,
+	SCHEMA_SMS_DEST_IDX,
 };
 
 static const char *create_stmts[] = {
@@ -227,6 +228,10 @@ static const char *create_stmts[] = {
 		"expire_unix INTEGER NOT NULL DEFAULT 0"
 		")",
 	[SCHEMA_SGS_ASSOC_IDX] = "CREATE INDEX IF NOT EXISTS SgsAssoc_mme ON SgsAssoc(mme_name)",
+	/* Every SGs attach looks up unsent SMS by dest MSISDN. Without this
+	 * index sqlite3VdbeExec scanned the whole SMS table (~50% CPU). */
+	[SCHEMA_SMS_DEST_IDX] =
+		"CREATE INDEX IF NOT EXISTS SMS_dest_unsent ON SMS(dest_addr, id) WHERE sent IS NULL",
 };
 
 /***********************************************************************
@@ -547,6 +552,16 @@ static int check_db_revision(struct db_context *dbc)
 		if (db_run_statements(dbc, mig6, ARRAY_SIZE(mig6)) < 0)
 			return -EINVAL;
 		LOGP(DDB, LOGL_NOTICE, "Migrated database schema from 6 to 7 (SgsAssoc)\n");
+	}
+		/* fall through */
+	case 7: {
+		static const char *mig7[] = {
+			"CREATE INDEX IF NOT EXISTS SMS_dest_unsent ON SMS(dest_addr, id) WHERE sent IS NULL",
+			"UPDATE Meta SET value = '8' WHERE key = 'revision'",
+		};
+		if (db_run_statements(dbc, mig7, ARRAY_SIZE(mig7)) < 0)
+			return -EINVAL;
+		LOGP(DDB, LOGL_NOTICE, "Migrated database schema from 7 to 8 (SMS dest_addr index)\n");
 		return 0;
 	}
 	default:
