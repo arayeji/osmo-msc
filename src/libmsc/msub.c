@@ -201,16 +201,9 @@ struct msub *msub_alloc(struct gsm_network *net)
  * msc_a_for_vsub(for_vsub, true) to make sure you don't use an invalid conn. */
 struct msub *msub_for_vsub(const struct vlr_subscr *for_vsub)
 {
-	struct msub *msub;
 	if (!for_vsub)
 		return NULL;
-
-	llist_for_each_entry(msub, &msub_list, entry) {
-		if (msub->vsub == for_vsub)
-			return msub;
-	}
-
-	return NULL;
+	return for_vsub->msc_msub;
 }
 
 const char *msub_name(const struct msub *msub)
@@ -396,12 +389,15 @@ int msub_set_vsub(struct msub *msub, struct vlr_subscr *vsub)
 		}
 	}
 	if (msub->vsub) {
+		if (msub->vsub->msc_msub == msub)
+			msub->vsub->msc_msub = NULL;
 		vlr_subscr_put(msub->vsub, VSUB_USE_MSUB);
 		msub->vsub = NULL;
 	}
 	if (vsub) {
 		vlr_subscr_get(vsub, VSUB_USE_MSUB);
 		msub->vsub = vsub;
+		vsub->msc_msub = msub;
 		vsub->cs.attached_via_ran = msub_ran(msub)->type;
 		msub_update_id(msub);
 	}
@@ -530,14 +526,9 @@ void msub_update_id(struct msub *msub)
  * instances. */
 void msub_update_id_for_vsub(struct vlr_subscr *for_vsub)
 {
-	struct msub *msub;
 	if (!for_vsub)
 		return;
-
-	llist_for_each_entry(msub, &msub_list, entry) {
-		if (msub->vsub == for_vsub)
-			msub_update_id(msub);
-	}
+	msub_update_id(msub_for_vsub(for_vsub));
 }
 
 void msc_role_forget_conn(struct osmo_fsm_inst *role, struct ran_conn *conn)

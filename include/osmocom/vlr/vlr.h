@@ -173,6 +173,8 @@ struct vlr_subscr {
 	time_t expire_lu;
 
 	void *msc_conn_ref;
+	/* MSC only: struct msub *. O(1) msub_for_vsub(); NULL if no conn. */
+	void *msc_msub;
 
 	/* PS (SGSN) specific parts */
 	struct {
