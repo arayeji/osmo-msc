@@ -1413,6 +1413,22 @@ int gsm0411_rcv_sms(struct msc_a *msc_a, struct msgb *msg)
 		return -EINVAL;
 	}
 
+	/*
+	 * Only CP-DATA can establish an MS-originated transaction (TS 24.011).
+	 * A CP-ACK or CP-ERROR for a transaction we do not have must be
+	 * dropped: treating it as a new MO transfer makes us CP-ACK it and
+	 * answer RP-ERROR 96 (its payload is no RP message), which the MS
+	 * rejects with another CP-ERROR on the same TI - an endless loop that
+	 * one UE was seen running at ~80 SGs messages per second.
+	 */
+	if (!trans && msg_type != GSM411_MT_CP_DATA) {
+		LOG_TRANS(trans, LOGL_NOTICE, "Rx %s for unknown MS trans_id=%x, ignoring\n",
+			  gsm48_pdisc_msgtype_name(gsm48_hdr_pdisc(gh), gsm48_hdr_msg_type(gh)),
+			  transaction_id);
+		gsm411_put_cm_service_sms(trans, msc_a);
+		return -EINVAL;
+	}
+
 	if (!trans) {
 		new_trans = 1;
 		trans = gsm411_trans_init(net, vsub, msc_a, transaction_id, true);
