@@ -489,6 +489,7 @@ void vlr_subscr_cancel_attach_fsm(struct vlr_subscr *vsub,
 				  enum gsm48_reject_value gsm48_cause);
 
 void vlr_subscr_enable_expire_lu(struct vlr_subscr *vsub);
+void vlr_subscr_enable_expire_lu_ran(struct vlr_subscr *vsub);
 void vlr_subscr_keep_incomplete_expiry(struct vlr_subscr *vsub);
 
 /* Process Access Request FSM */

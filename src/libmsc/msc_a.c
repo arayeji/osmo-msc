@@ -1062,9 +1062,8 @@ static void msc_a_fsm_releasing_onenter(struct osmo_fsm_inst *fi, uint32_t prev_
 		/* Cancel all VLR FSMs, if any */
 		vlr_subscr_cancel_attach_fsm(vsub, OSMO_FSM_TERM_ERROR, GSM48_REJECT_CONGESTION);
 
-		/* The subscriber has no active connection anymore.
-		 * Restart the periodic Location Update expiry timer for this subscriber. */
-		vlr_subscr_enable_expire_lu(vsub);
+		/* Restart periodic LU expiry. SGs uses X3212 (0 = never). */
+		vlr_subscr_enable_expire_lu_ran(vsub);
 	}
 
 	/* We no longer care about assignment responses. */

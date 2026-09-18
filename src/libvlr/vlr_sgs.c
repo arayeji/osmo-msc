@@ -194,20 +194,9 @@ void vlr_sgs_lu_release(struct vlr_subscr *vsub)
 
 void vlr_sgs_loc_update_acc_sent(struct vlr_subscr *vsub)
 {
-	unsigned long x3212_secs;
-
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_TX_LU_ACCEPT, NULL);
 
-	x3212_secs = osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0);
-	if (x3212_secs) {
-		struct timespec now;
-		if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
-			vsub->expire_lu = now.tv_sec + x3212_secs;
-	} else if (!vlr_timer_secs(vsub->vlr, 3212, 3312)) {
-		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
-	} else {
-		vlr_subscr_enable_expire_lu(vsub);
-	}
+	vlr_subscr_enable_expire_lu_ran(vsub);
 
 	if (vsub->vlr->ops.sgs_assoc_persist)
 		vsub->vlr->ops.sgs_assoc_persist(vsub);
