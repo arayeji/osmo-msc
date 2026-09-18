@@ -24,6 +24,7 @@
 #include <osmocom/core/use_count.h>
 #include <osmocom/core/tdef.h>
 #include <osmocom/core/fsm.h>
+#include <osmocom/gsm/gsm48.h>
 #include <osmocom/vlr/vlr.h>
 #include <osmocom/vlr/vlr_sgs.h>
 
@@ -54,6 +55,29 @@ void vlr_sgs_rx_service_req(struct vlr_subscr *vsub)
 	if (!vsub || !vsub->sgs_fsm)
 		return;
 	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_SERVICE_REQ, NULL);
+}
+
+/* 29.118 5.1: after successful authentication of a paging response on A/Iu
+ * from a Location Area different from the one stored in the VLR, set the
+ * SGs association to SGs-NULL. Do not notify the MME. */
+void vlr_sgs_paging_resp_from_a_iu(struct vlr_subscr *vsub,
+				   const struct osmo_location_area_id *lai)
+{
+	if (!vsub || !vsub->sgs_fsm || !lai)
+		return;
+	if (vsub->sgs_fsm->state == SGS_UE_ST_NULL)
+		return;
+	/* Incomplete CGI on Complete Layer 3: do not guess. */
+	if (!lai->lac)
+		return;
+	if (osmo_plmn_cmp(&vsub->sgs.lai.plmn, &lai->plmn) == 0
+	    && vsub->sgs.lai.lac == lai->lac)
+		return;
+
+	LOGPFSML(vsub->sgs_fsm, LOGL_INFO,
+		 "Paging response from different LAI (%s vs stored %s): SGs-NULL (29.118 5.1)\n",
+		 osmo_lai_name(lai), osmo_lai_name(&vsub->sgs.lai));
+	osmo_fsm_inst_dispatch(vsub->sgs_fsm, SGS_UE_E_RX_LU_FROM_A_IU_GS, NULL);
 }
 
 const struct value_string sgs_state_timer_names[] = {

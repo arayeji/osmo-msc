@@ -221,6 +221,11 @@ static void evaluate_acceptance_outcome(struct osmo_fsm_inst *fi, bool conn_acce
 			paging_expired(vsub);
 		/* paging_response() can detach the vsub from this conn. */
 		vsub = msc_a_vsub(msc_a);
+		/* After paging is concluded: 29.118 5.1 different LAI →
+		 * SGs-NULL. Must not run before paging_response() or
+		 * to_null() would expire this successful page. */
+		if (conn_accepted && vsub)
+			vlr_sgs_paging_resp_from_a_iu(vsub, &msc_a->via_cell.lai);
 	}
 
 	if (conn_accepted && vsub)

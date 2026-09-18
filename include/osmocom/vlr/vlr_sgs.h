@@ -122,3 +122,7 @@ unsigned int vlr_sgs_pag_inflight(void);
 void vlr_sgs_pag_stop(struct vlr_subscr *vsub);
 /* 29.118 5.1.2.2: SERVICE-REQUEST after VLR restart (SGs-NULL). */
 void vlr_sgs_rx_service_req(struct vlr_subscr *vsub);
+/* 29.118 5.1: A/Iu paging response from a different LAI → SGs-NULL after auth.
+ * No SGs message to the MME (same as Gs / A/Iu LAU). */
+void vlr_sgs_paging_resp_from_a_iu(struct vlr_subscr *vsub,
+				   const struct osmo_location_area_id *lai);
