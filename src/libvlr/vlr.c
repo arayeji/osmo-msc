@@ -882,32 +882,6 @@ void vlr_subscr_enable_expire_lu(struct vlr_subscr *vsub)
 	}
 }
 
-/* SGs UEs do not send periodic CS LU. X3212=0 means never expire (29.118).
- * Applying GERAN T3212 here was wiping lu_complete after every SGs
- * SERVICE-REQ/SMS release, then Purge-MS, while the MME still looked fine. */
-void vlr_subscr_enable_expire_lu_ran(struct vlr_subscr *vsub)
-{
-	unsigned long x3212_secs;
-	struct timespec now;
-
-	if (!vsub)
-		return;
-	if (vsub->cs.attached_via_ran != OSMO_RAT_EUTRAN_SGS) {
-		vlr_subscr_enable_expire_lu(vsub);
-		return;
-	}
-
-	x3212_secs = osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0);
-	if (!x3212_secs) {
-		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
-		return;
-	}
-	if (osmo_clock_gettime(CLOCK_MONOTONIC, &now) == 0)
-		vsub->expire_lu = now.tv_sec + x3212_secs;
-	else
-		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
-}
-
 /* Incomplete rows must not get expire_lu=never: the sweeper cannot
  * drop them, and leftover use-counts make them immortal. */
 void vlr_subscr_keep_incomplete_expiry(struct vlr_subscr *vsub)

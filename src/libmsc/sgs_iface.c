@@ -31,7 +31,6 @@
 #include <osmocom/core/socket.h>
 #include <osmocom/core/select.h>
 #include <osmocom/core/timer.h>
-#include <osmocom/core/tdef.h>
 
 #include <osmocom/gsm/tlv.h>
 #include <osmocom/gsm/gsm48.h>
@@ -1844,11 +1843,7 @@ static int sgs_restore_one(void *data, const struct db_sgs_assoc *row)
 	vlr_subscr_set_lu_complete(vsub, true);
 	vsub->imsi_detached_flag = false;
 
-	/* X3212=0: restored SGs rows must not inherit a stale T3212
-	 * expire_unix (that immediately T3212-detached tens of thousands). */
-	if (!osmo_tdef_get(vlr_tdefs, -3212, OSMO_TDEF_S, 0))
-		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
-	else if (row->expire_unix > 0 && osmo_clock_gettime(CLOCK_MONOTONIC, &mono) == 0)
+	if (row->expire_unix > 0 && osmo_clock_gettime(CLOCK_MONOTONIC, &mono) == 0)
 		vsub->expire_lu = mono.tv_sec + (row->expire_unix - now);
 	else
 		vsub->expire_lu = VLR_SUBSCRIBER_NO_EXPIRATION;
