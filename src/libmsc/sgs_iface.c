@@ -653,6 +653,9 @@ static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg)
 		if (vsub) {
 			log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
 			vlr_subscr_put(vsub, __func__);
+		} else {
+			LOGSGC(sgc, LOGL_NOTICE, "Tx %s for unknown IMSI %s\n",
+			       sgsap_msg_type_name(msg->data[0]), imsi);
 		}
 		msc_api_trace_packet(imsi, "sgsap", false, payload, plen);
 	}
@@ -1460,6 +1463,9 @@ int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg)
 		if (vsub) {
 			log_set_context(LOG_CTX_VLR_SUBSCR, vsub);
 			vlr_subscr_put(vsub, __func__);
+		} else {
+			LOGSGC(sgc, LOGL_NOTICE, "Rx %s for unknown IMSI %s\n",
+			       sgsap_msg_type_name(msg_type), imsi);
 		}
 		msc_api_trace_packet(imsi, "sgsap", true, payload, plen);
 	}

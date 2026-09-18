@@ -543,8 +543,14 @@ static int filter_fn(const struct log_context *ctx, struct log_target *tar)
 {
 	const struct vlr_subscr *vsub = log_get_context(ctx, LOG_CTX_VLR_SUBSCR);
 
+	if (!vsub)
+		return 0;
+	/* API traces match by IMSI so a discarded/recreated VLR entry still
+	 * logs after LocationCancel / IMSI-DETACH. */
+	if (msc_api_log_target_matches(tar, vsub->imsi))
+		return 1;
 	if (log_get_filter(tar, LOG_FLT_VLR_SUBSCR) &&
-	    vsub && vsub == log_get_filter_data(tar, LOG_FLT_VLR_SUBSCR))
+	    vsub == log_get_filter_data(tar, LOG_FLT_VLR_SUBSCR))
 		return 1;
 
 	return 0;

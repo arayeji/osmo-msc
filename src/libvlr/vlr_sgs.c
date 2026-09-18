@@ -240,8 +240,11 @@ void vlr_sgs_imsi_detach(struct vlr_instance *vlr, const char *imsi, enum sgsap_
 	enum sgs_ue_fsm_event evt;
 
 	vsub = vlr_subscr_find_by_imsi(vlr, imsi, __func__);
-	if (!vsub)
+	if (!vsub) {
+		LOGSGS(LOGL_NOTICE, "SGs IMSI-DETACH for unknown IMSI %s (type %u)\n",
+		       imsi, type);
 		return;
+	}
 
 	/* See also: 3GPP TS 29.118, 5.6.3 Procedures in the VLR: In case of
 	 * an implicit detach, we are supposed to check if the state of the
@@ -285,8 +288,11 @@ void vlr_sgs_eps_detach(struct vlr_instance *vlr, const char *imsi, enum sgsap_i
 	struct vlr_subscr *vsub;
 	enum sgs_ue_fsm_event evt;
 	vsub = vlr_subscr_find_by_imsi(vlr, imsi, __func__);
-	if (!vsub)
+	if (!vsub) {
+		LOGSGS(LOGL_NOTICE, "SGs EPS-DETACH for unknown IMSI %s (type %u)\n",
+		       imsi, type);
 		return;
+	}
 
 	switch (type) {
 	case SGSAP_ID_EPS_T_NETWORK_INITIATED:

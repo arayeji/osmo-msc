@@ -1247,6 +1247,22 @@ bool msc_api_trace_active(const char *imsi)
 	return api_trace_find(g_msc_api, imsi) != NULL;
 }
 
+/* Match a per-IMSI stderr target by IMSI string, not vsub pointer.
+ * The pointer dies when the subscriber is discarded; LocationCancel /
+ * IMSI-DETACH then have no filtered logs even though the trace is still on. */
+bool msc_api_log_target_matches(const struct log_target *tar, const char *imsi)
+{
+	struct msc_api_trace *t;
+
+	if (!g_msc_api || !tar || !imsi || !imsi[0])
+		return false;
+	llist_for_each_entry(t, &g_msc_api->traces, entry) {
+		if (t->target == tar && !strcmp(t->imsi, imsi))
+			return true;
+	}
+	return false;
+}
+
 void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
 			  const uint8_t *data, size_t len)
 {
@@ -1438,45 +1454,47 @@ static int api_trace_enable(struct msc_api_state *api, const char *imsi,
 		return 0;
 	}
 
-	/* the VLR filter pins to a live subscriber object (pointer identity),
-	 * so the subscriber must already be known to the VLR. */
+	/* PACKET dumps are keyed by IMSI string. Allow traces before the
+	 * subscriber is in the VLR (cancelLocation / IMSI-DETACH). */
 	vsub = vlr_subscr_find_by_imsi(net->vlr, imsi, VSUB_USE_API_TRACE);
-	if (!vsub)
-		return -ENOENT;
 
 	t = talloc_zero(api, struct msc_api_trace);
 	if (!t) {
-		vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
+		if (vsub)
+			vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
 		return -ENOMEM;
 	}
 	osmo_strlcpy(t->imsi, imsi, sizeof(t->imsi));
-	osmo_strlcpy(t->msisdn, vsub->msisdn, sizeof(t->msisdn));
+	if (vsub)
+		osmo_strlcpy(t->msisdn, vsub->msisdn, sizeof(t->msisdn));
 
-	/* emit to stderr so the daemon's journald unit captures the lines */
-	tgt = log_target_create_stderr();
-	if (!tgt) {
+	/* emit to stderr so the daemon's journald unit captures the lines.
+	 * Without a vsub, skip the filtered DEBUG target (it would otherwise
+	 * take all logs). SGs/GSUP PACKET lines still go out. */
+	if (vsub) {
+		tgt = log_target_create_stderr();
+		if (!tgt) {
+			vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
+			talloc_free(t);
+			return -EIO;
+		}
+
+		log_set_log_level(tgt, LOGL_DEBUG);
+		log_set_use_color(tgt, 0);
+		log_set_print_category(tgt, 1);
+		log_set_print_category_hex(tgt, 0);
+		log_set_print_level(tgt, 1);
+		log_set_print_extended_timestamp(tgt, 1);
+		log_set_filter_vlr_subscr(tgt, vsub);
+		log_add_target(tgt);
+		t->target = tgt;
 		vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
-		talloc_free(t);
-		return -EIO;
 	}
 
-	log_set_log_level(tgt, LOGL_DEBUG);
-	log_set_use_color(tgt, 0);
-	log_set_print_category(tgt, 1);
-	log_set_print_category_hex(tgt, 0);
-	log_set_print_level(tgt, 1);
-	log_set_print_extended_timestamp(tgt, 1);
-	/* pin to this subscriber; the daemon filter_fn() does the matching */
-	log_set_filter_vlr_subscr(tgt, vsub);
-	log_add_target(tgt);
-
-	t->target = tgt;
 	llist_add_tail(&t->entry, &api->traces);
 
-	/* log_set_filter_vlr_subscr took its own ref; drop ours */
-	vlr_subscr_put(vsub, VSUB_USE_API_TRACE);
-
-	LOGP(DMSC, LOGL_NOTICE, "API enabled IMSI debug trace for %s (-> journal)\n", imsi);
+	LOGP(DMSC, LOGL_NOTICE, "API enabled IMSI debug trace for %s%s\n",
+	     imsi, vsub ? " (-> journal)" : " (not in VLR; packets only)");
 	*out_trace = t;
 	return 0;
 }
@@ -1545,12 +1563,6 @@ static bool api_handle_trace(struct msc_api_conn *conn, struct msc_api_state *ap
 
 	if (!strcmp(method, "POST") || !strcmp(method, "PUT")) {
 		rc = api_trace_enable(api, imsi, &t);
-		if (rc == -ENOENT) {
-			api_send_response(conn->srv, 404, "Not Found",
-					  "{\"error\":\"subscriber not known to VLR; "
-					  "trace can only be attached to an attached subscriber\"}");
-			return true;
-		}
 		if (rc < 0) {
 			api_send_response(conn->srv, 500, "Internal Server Error",
 					  "{\"error\":\"failed to enable trace\"}");

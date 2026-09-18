@@ -44,6 +44,7 @@ struct vty;
 struct msc_api_state *msc_api_alloc(void *ctx, struct gsm_network *net);
 void msc_api_trace_register_vlr(struct gsm_network *net);
 bool msc_api_trace_active(const char *imsi);
+bool msc_api_log_target_matches(const struct log_target *tar, const char *imsi);
 void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
 			  const uint8_t *data, size_t len);
 void msc_api_trace_mncc(struct gsm_network *net, bool is_rx, const void *data, size_t len);
