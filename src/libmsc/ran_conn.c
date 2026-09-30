@@ -47,6 +47,7 @@ struct ran_conn *ran_conn_create_incoming(struct ran_peer *ran_peer, uint32_t sc
 		.ran_peer = ran_peer,
 		.sccp_conn_id = sccp_conn_id,
 	};
+	INIT_LLIST_HEAD(&conn->ipt_pending);
 
 	llist_add(&conn->entry, &ran_peer->sri->ran_conns);
 	return conn;

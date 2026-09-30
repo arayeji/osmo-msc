@@ -323,9 +323,10 @@ struct vlr_instance {
 	unsigned int incomplete_snap_ticks;
 	/* A free-form pointer for use by the caller */
 	void *user_ctx;
-	/*! Optional callback for IMSI-scoped packet tracing (OsmoMSC API trace). */
-	void (*imsi_trace_packet)(struct vlr_instance *vlr, const char *imsi, const char *proto,
-				  bool is_rx, const uint8_t *data, size_t len);
+	/*! Optional callback for IMSI-scoped GSUP tracing (OsmoMSC API trace). Called for every
+	 * GSUP message; the callee encodes only for traced IMSIs. */
+	void (*imsi_trace_gsup)(struct vlr_instance *vlr, const char *imsi, bool is_rx,
+				const struct osmo_gsup_message *gsup_msg);
 };
 
 extern const struct value_string vlr_ciph_names[];

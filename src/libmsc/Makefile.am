@@ -75,6 +75,7 @@ libmsc_a_SOURCES = \
 	msc_net_init.c \
 	ctrl_commands.c \
 	msc_api.c \
+	msc_iptrace.c \
 	sgs_iface.c \
 	sgs_server.c \
 	sgs_vty.c \

@@ -26,6 +26,7 @@
 #include <osmocom/core/stat_item.h>
 #include <osmocom/sigtran/sccp_helpers.h>
 
+#include <osmocom/msc/msc_iptrace.h>
 #include <osmocom/msc/ran_peer.h>
 #include <osmocom/msc/sccp_ran.h>
 #include <osmocom/msc/msub.h>
@@ -748,6 +749,7 @@ int ran_peer_down_paging(struct ran_peer *rp, const struct gsm0808_cell_id *page
 			 enum paging_cause cause)
 {
 	struct msgb *l2;
+	int rc;
 
 	/* ran_peer is not ready for paging (link not ready). */
 	if (rp->fi->state != RAN_PEER_ST_READY)
@@ -761,7 +763,10 @@ int ran_peer_down_paging(struct ran_peer *rp, const struct gsm0808_cell_id *page
 	LOG_RAN_PEER_CAT(rp, DPAG, LOGL_DEBUG, "Paging for %s on %s\n", vlr_subscr_name(vsub),
 			 gsm0808_cell_id_name(page_id));
 	l2 = rp->sri->ran->sccp_ran_ops.make_paging_msg(rp->sri, page_id, vsub->imsi, vsub->tmsi, cause);
-	if (osmo_fsm_inst_dispatch(rp->fi, RAN_PEER_EV_MSG_DOWN_CL, l2)) {
+	msc_iptrace_set_cl_imsi(vsub->imsi);
+	rc = osmo_fsm_inst_dispatch(rp->fi, RAN_PEER_EV_MSG_DOWN_CL, l2);
+	msc_iptrace_set_cl_imsi(NULL);
+	if (rc) {
 		/* Not allowed to send messages, the peer is not properly connected yet/anymore */
 		LOG_RAN_PEER_CAT(rp, DPAG, LOGL_ERROR,
 				 "Paging for %s matched this RAN peer, but emitting a Paging failed\n",

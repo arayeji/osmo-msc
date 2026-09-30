@@ -13,9 +13,12 @@ struct log_target;
 #define MSC_API_TOKEN_MAXLEN 128
 /* Max raw bytes base64-encoded per PACKET trace line (trunc=1 if longer). */
 #define MSC_API_TRACE_PACKET_MAX 4096
+/* Same for IPPACKET lines (whole rebuilt IP datagram). */
+#define MSC_API_TRACE_IPPACKET_MAX 16384
 
 struct osmo_gsup_message;
 struct gsup_client_mux;
+struct timeval;
 
 /* One active per-IMSI debug trace: a dedicated libosmocore stderr log target
  * (captured by journald) whose VLR-subscriber filter is pinned to this
@@ -44,9 +47,12 @@ struct vty;
 struct msc_api_state *msc_api_alloc(void *ctx, struct gsm_network *net);
 void msc_api_trace_register_vlr(struct gsm_network *net);
 bool msc_api_trace_active(const char *imsi);
+bool msc_api_traces_any(void);
 bool msc_api_log_target_matches(const struct log_target *tar, const char *imsi);
 void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
 			  const uint8_t *data, size_t len);
+void msc_api_trace_ippacket(const char *imsi, const char *link, const char *proto, bool is_rx,
+			    bool ep_guess, const struct timeval *tv, const uint8_t *ip, size_t len);
 void msc_api_trace_mncc(struct gsm_network *net, bool is_rx, const void *data, size_t len);
 void msc_api_trace_gsup_rx(const struct osmo_gsup_message *gsup_msg);
 int msc_gsup_mux_tx(struct gsup_client_mux *gcm, const struct osmo_gsup_message *gsup_msg);

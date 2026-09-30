@@ -89,3 +89,6 @@ contrib/server-common.env
 contrib/_*.sh
 contrib/_*.txt
 contrib/_*.py
+contrib/_*.c
+contrib/_*.log
+contrib/_*.pcap

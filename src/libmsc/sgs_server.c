@@ -206,7 +206,7 @@ static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 		if (n >= SGS_RX_MAX_PER_WAKE)
 			return 0;
 		struct msgb *msg = gsm29118_msgb_alloc();
-		struct sctp_sndrcvinfo sinfo;
+		struct sctp_sndrcvinfo sinfo = {};
 		int flags = 0;
 		int rc;
 
@@ -236,6 +236,10 @@ static int sgs_conn_readable_cb(struct osmo_stream_srv *conn)
 		}
 
 		msg->l2h = msgb_data(msg);
+		if (sgc) {
+			sgc->rx_stream = sinfo.sinfo_stream;
+			sgc->rx_tsn = sinfo.sinfo_tsn;
+		}
 
 		if (msgb_sctp_ppid(msg) != 0) {
 			LOGSGC(sgc, LOGL_NOTICE, "Ignoring SCTP PPID %ld (spec violation)\n",

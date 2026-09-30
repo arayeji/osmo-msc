@@ -65,6 +65,10 @@ struct sgs_connection {
 	/* Destroy after the current select() turn so we do not free an
 	 * osmo_fd that is still queued in this poll iteration. */
 	struct osmo_timer_list destroy_timer;
+
+	/* sctp_sndrcvinfo of the message being handled (API IP trace) */
+	uint16_t rx_stream;
+	uint32_t rx_tsn;
 };
 
 struct sgs_mme_ctx {

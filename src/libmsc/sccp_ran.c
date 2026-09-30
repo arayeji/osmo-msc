@@ -27,6 +27,7 @@
 #include <osmocom/sigtran/sccp_helpers.h>
 
 #include <osmocom/msc/debug.h>
+#include <osmocom/msc/msc_iptrace.h>
 #include <osmocom/msc/sccp_ran.h>
 #include <osmocom/msc/ran_infra.h>
 #include <osmocom/msc/ran_peer.h>
@@ -218,7 +219,9 @@ static int sccp_ran_sap_up(struct osmo_prim_hdr *oph, void *_scu)
 		/* ensure the local SCCP socket is ACTIVE */
 		osmo_sccp_tx_conn_resp(scu, conn_id, my_addr, NULL, 0);
 
+		msc_iptrace_sccp_rx_cr(sri, conn_id, peer_addr, my_addr, msgb_l2(oph->msg), msgb_l2len(oph->msg));
 		rc = sri->ran->sccp_ran_ops.up_l2(sri, peer_addr, true, conn_id, oph->msg);
+		msc_iptrace_sccp_flush(sri, conn_id);
 		if (rc)
 			osmo_sccp_tx_disconn(scu, conn_id, my_addr, SCCP_RETURN_CAUSE_UNQUALIFIED);
 		break;
@@ -228,13 +231,19 @@ static int sccp_ran_sap_up(struct osmo_prim_hdr *oph, void *_scu)
 		conn_id = prim->u.data.conn_id;
 		LOG_SCCP_RAN_CO(sri, NULL, conn_id, LOGL_DEBUG, "%s(%s)\n", __func__, osmo_scu_prim_name(oph));
 
+		msc_iptrace_sccp_co(sri, conn_id, true, MSC_IPT_SCCP_DT1, NULL,
+				    msgb_l2(oph->msg), msgb_l2len(oph->msg));
 		rc = sri->ran->sccp_ran_ops.up_l2(sri, NULL, true, conn_id, oph->msg);
+		msc_iptrace_sccp_flush(sri, conn_id);
 		break;
 
 	case OSMO_PRIM(OSMO_SCU_PRIM_N_DISCONNECT, PRIM_OP_INDICATION):
 		/* indication of disconnect */
 		conn_id = prim->u.disconnect.conn_id;
 		LOG_SCCP_RAN_CO(sri, NULL, conn_id, LOGL_DEBUG, "%s(%s)\n", __func__, osmo_scu_prim_name(oph));
+
+		msc_iptrace_sccp_co(sri, conn_id, true, MSC_IPT_SCCP_RLSD, NULL,
+				    msgb_l2(oph->msg), msgb_l2len(oph->msg));
 
 		/* If there is no L2 payload in the N-DISCONNECT, no need to dispatch up_l2(). */
 		if (msgb_l2len(oph->msg))
@@ -306,6 +315,7 @@ int sccp_ran_down_l2_co_initial(struct sccp_ran_inst *sri,
 	struct osmo_scu_prim *prim;
 
 	l2->l2h = l2->data;
+	msc_iptrace_sccp_co(sri, conn_id, false, MSC_IPT_SCCP_CR, called_addr, l2->data, l2->len);
 
 	msgb_pad_mod8(l2);
 	prim = (struct osmo_scu_prim *) msgb_push(l2, sizeof(*prim));
@@ -325,6 +335,7 @@ int sccp_ran_down_l2_co(struct sccp_ran_inst *sri, uint32_t conn_id, struct msgb
 	struct osmo_scu_prim *prim;
 
 	l2->l2h = l2->data;
+	msc_iptrace_sccp_co(sri, conn_id, false, MSC_IPT_SCCP_DT1, NULL, l2->data, l2->len);
 
 	msgb_pad_mod8(l2);
 	prim = (struct osmo_scu_prim *) msgb_push(l2, sizeof(*prim));
@@ -338,6 +349,7 @@ int sccp_ran_down_l2_cl(struct sccp_ran_inst *sri, const struct osmo_sccp_addr *
 	struct osmo_scu_prim *prim;
 
 	l2->l2h = l2->data;
+	msc_iptrace_sccp_udt_tx(sri, called_addr, l2->data, l2->len);
 
 	msgb_pad_mod8(l2);
 	prim = (struct osmo_scu_prim *) msgb_push(l2, sizeof(*prim));
@@ -351,5 +363,6 @@ int sccp_ran_down_l2_cl(struct sccp_ran_inst *sri, const struct osmo_sccp_addr *
 
 int sccp_ran_disconnect(struct sccp_ran_inst *sri, uint32_t conn_id, uint32_t cause)
 {
+	msc_iptrace_sccp_co(sri, conn_id, false, MSC_IPT_SCCP_RLSD, NULL, NULL, 0);
 	return osmo_sccp_tx_disconn(sri->scu, conn_id, NULL, cause);
 }

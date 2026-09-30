@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/time.h>
 #include <time.h>
 
 #include <osmocom/core/msgb.h>
@@ -31,6 +32,7 @@
 #include <osmocom/msc/gsm_data.h>
 #include <osmocom/msc/msc_a.h>
 #include <osmocom/msc/msc_api.h>
+#include <osmocom/msc/msc_iptrace.h>
 #include <osmocom/msc/msub.h>
 #include <osmocom/msc/neighbor_ident.h>
 #include <osmocom/msc/ran_conn.h>
@@ -1227,17 +1229,19 @@ static struct msc_api_trace *api_trace_find(struct msc_api_state *api, const cha
 	return NULL;
 }
 
-static void msc_api_vlr_trace_packet(struct vlr_instance *vlr, const char *imsi, const char *proto,
-				     bool is_rx, const uint8_t *data, size_t len)
+static void api_trace_gsup_imsi(const char *imsi, const struct osmo_gsup_message *gsup_msg, bool is_rx);
+
+static void msc_api_vlr_trace_gsup(struct vlr_instance *vlr, const char *imsi, bool is_rx,
+				   const struct osmo_gsup_message *gsup_msg)
 {
 	(void)vlr;
-	msc_api_trace_packet(imsi, proto, is_rx, data, len);
+	api_trace_gsup_imsi(imsi, gsup_msg, is_rx);
 }
 
 void msc_api_trace_register_vlr(struct gsm_network *net)
 {
 	if (net && net->vlr)
-		net->vlr->imsi_trace_packet = msc_api_vlr_trace_packet;
+		net->vlr->imsi_trace_gsup = msc_api_vlr_trace_gsup;
 }
 
 bool msc_api_trace_active(const char *imsi)
@@ -1263,44 +1267,71 @@ bool msc_api_log_target_matches(const struct log_target *tar, const char *imsi)
 	return false;
 }
 
-void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
-			  const uint8_t *data, size_t len)
+bool msc_api_traces_any(void)
 {
-	struct msc_api_trace *t;
-	size_t log_len, b64_buf_len, olen;
+	return g_msc_api && !llist_empty(&g_msc_api->traces);
+}
+
+/* Returns a talloc'ed base64 string of at most max bytes of data. */
+static char *api_trace_b64(const uint8_t *data, size_t len, size_t max, bool *trunc)
+{
+	size_t log_len = len, b64_buf_len, olen;
 	unsigned char *b64;
-	bool trunc = false;
 
-	if (!g_msc_api || !imsi || !imsi[0] || !proto || !data || len == 0)
-		return;
-
-	t = api_trace_find(g_msc_api, imsi);
-	if (!t)
-		return;
-
-	log_len = len;
-	if (log_len > MSC_API_TRACE_PACKET_MAX) {
-		log_len = MSC_API_TRACE_PACKET_MAX;
-		trunc = true;
+	*trunc = false;
+	if (log_len > max) {
+		log_len = max;
+		*trunc = true;
 	}
 
 	b64_buf_len = ((log_len + 2) / 3) * 4 + 1;
 	b64 = talloc_size(g_msc_api, b64_buf_len);
 	if (!b64)
-		return;
-
+		return NULL;
 	if (osmo_base64_encode(b64, b64_buf_len, &olen, data, log_len) != 0) {
 		talloc_free(b64);
-		return;
+		return NULL;
 	}
+	return (char *)b64;
+}
 
-	if (trunc)
-		fprintf(stderr, "[IMSI:%s] PACKET: proto=%s dir=%s len=%zu trunc=1 b64=%s\n",
-			imsi, proto, is_rx ? "rx" : "tx", len, b64);
-	else
-		fprintf(stderr, "[IMSI:%s] PACKET: proto=%s dir=%s len=%zu b64=%s\n",
-			imsi, proto, is_rx ? "rx" : "tx", len, b64);
+void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
+			  const uint8_t *data, size_t len)
+{
+	char *b64;
+	bool trunc;
 
+	if (!g_msc_api || !imsi || !imsi[0] || !proto || !data || len == 0)
+		return;
+	if (!api_trace_find(g_msc_api, imsi))
+		return;
+
+	b64 = api_trace_b64(data, len, MSC_API_TRACE_PACKET_MAX, &trunc);
+	if (!b64)
+		return;
+	fprintf(stderr, "[IMSI:%s] PACKET: proto=%s dir=%s len=%zu%s b64=%s\n",
+		imsi, proto, is_rx ? "rx" : "tx", len, trunc ? " trunc=1" : "", b64);
+	talloc_free(b64);
+}
+
+/* One rebuilt IP datagram (pcap LINKTYPE_RAW), see msc_iptrace.c. */
+void msc_api_trace_ippacket(const char *imsi, const char *link, const char *proto, bool is_rx,
+			    bool ep_guess, const struct timeval *tv, const uint8_t *ip, size_t len)
+{
+	char *b64;
+	bool trunc;
+
+	if (!g_msc_api || !imsi || !imsi[0] || !ip || len == 0)
+		return;
+	if (!api_trace_find(g_msc_api, imsi))
+		return;
+
+	b64 = api_trace_b64(ip, len, MSC_API_TRACE_IPPACKET_MAX, &trunc);
+	if (!b64)
+		return;
+	fprintf(stderr, "[IMSI:%s] IPPACKET: link=%s proto=%s dir=%s ts=%ld.%06ld len=%zu%s%s b64=%s\n",
+		imsi, link, proto, is_rx ? "rx" : "tx", (long)tv->tv_sec, (long)tv->tv_usec, len,
+		ep_guess ? " ep=guess" : "", trunc ? " trunc=1" : "", b64);
 	talloc_free(b64);
 }
 
@@ -1308,7 +1339,7 @@ void msc_api_trace_packet(const char *imsi, const char *proto, bool is_rx,
 
 static bool msc_api_has_traces(void)
 {
-	return g_msc_api && !llist_empty(&g_msc_api->traces);
+	return msc_api_traces_any();
 }
 
 static bool api_trace_num_eq(const char *a, const char *b)
@@ -1402,20 +1433,31 @@ void msc_api_trace_mncc(struct gsm_network *net, bool is_rx, const void *data, s
 	}
 }
 
-static void msc_api_trace_gsup(const struct osmo_gsup_message *gsup_msg, bool is_rx)
+/* Re-encode for the trace only when this IMSI is traced: this runs for every
+ * LU, SAI and Purge. */
+static void api_trace_gsup_imsi(const char *imsi, const struct osmo_gsup_message *gsup_msg, bool is_rx)
 {
 	struct msgb *msg;
 
-	if (!gsup_msg || !gsup_msg->imsi[0])
+	if (!gsup_msg || !imsi || !imsi[0] || !msc_api_trace_active(imsi))
 		return;
 
-	msg = msgb_alloc(1024, "gsup-trace");
+	msg = msgb_alloc(4096, "gsup-trace");
 	if (!msg)
 		return;
 
-	if (osmo_gsup_encode(msg, gsup_msg) == 0)
-		msc_api_trace_packet(gsup_msg->imsi, "gsup", is_rx, msg->data, msg->len);
+	if (osmo_gsup_encode(msg, gsup_msg) == 0) {
+		msc_api_trace_packet(imsi, "gsup", is_rx, msg->data, msg->len);
+		msc_iptrace_gsup(g_msc_api->net ? g_msc_api->net->gcm : NULL, imsi, is_rx,
+				 msg->data, msg->len);
+	}
 	msgb_free(msg);
+}
+
+static void msc_api_trace_gsup(const struct osmo_gsup_message *gsup_msg, bool is_rx)
+{
+	if (gsup_msg)
+		api_trace_gsup_imsi(gsup_msg->imsi, gsup_msg, is_rx);
 }
 
 void msc_api_trace_gsup_rx(const struct osmo_gsup_message *gsup_msg)
@@ -1434,7 +1476,7 @@ static char *api_json_trace(void *ctx, const struct msc_api_trace *t, const char
 	char *imsi = json_escape(ctx, t->imsi);
 
 	return talloc_asprintf(ctx,
-		"{\"status\":\"%s\",\"imsi\":\"%s\",\"output\":\"journal\",\"level\":\"debug\",\"packets\":true}",
+		"{\"status\":\"%s\",\"imsi\":\"%s\",\"output\":\"journal\",\"level\":\"debug\",\"packets\":true,\"ip_packets\":true}",
 		status, imsi);
 }
 

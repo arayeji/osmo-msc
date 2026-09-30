@@ -395,18 +395,8 @@ struct vlr_subscr *_vlr_subscr_find_by_mi(struct vlr_instance *vlr,
 static void vlr_trace_gsup_packet(struct vlr_instance *vlr, const char *imsi, bool is_rx,
 				  const struct osmo_gsup_message *gsup_msg)
 {
-	struct msgb *msg;
-
-	if (!vlr->imsi_trace_packet || !imsi || !imsi[0])
-		return;
-
-	msg = msgb_alloc(1024, "gsup-trace");
-	if (!msg)
-		return;
-
-	if (osmo_gsup_encode(msg, gsup_msg) == 0)
-		vlr->imsi_trace_packet(vlr, imsi, "gsup", is_rx, msg->data, msg->len);
-	msgb_free(msg);
+	if (vlr->imsi_trace_gsup && imsi && imsi[0])
+		vlr->imsi_trace_gsup(vlr, imsi, is_rx, gsup_msg);
 }
 
 static int vlr_subscr_tx_gsup_message(const struct vlr_subscr *vsub,

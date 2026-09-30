@@ -51,6 +51,7 @@
 
 #include <osmocom/msc/debug.h>
 #include <osmocom/msc/msc_api.h>
+#include <osmocom/msc/msc_iptrace.h>
 #include <osmocom/msc/sgs_iface.h>
 #include <osmocom/msc/sgs_server.h>
 #include <osmocom/msc/db.h>
@@ -666,6 +667,13 @@ static void sgs_tx(struct sgs_connection *sgc, struct msgb *msg)
 		     sgsap_msg_type_name(msg->data[0]));
 		msgb_free(msg);
 		return;
+	}
+	if (imsi) {
+		const uint8_t *payload;
+		size_t plen;
+
+		sgsap_msg_payload(msg, &payload, &plen);
+		msc_iptrace_sgs(sgc, imsi, false, msgb_sctp_stream(msg), 0, payload, plen);
 	}
 	osmo_stream_srv_send(sgc->srv, msg);
 }
@@ -1468,6 +1476,8 @@ int sgs_iface_rx(struct sgs_connection *sgc, struct msgb *msg)
 			       sgsap_msg_type_name(msg_type), imsi);
 		}
 		msc_api_trace_packet(imsi, "sgsap", true, payload, plen);
+		if (sgc)
+			msc_iptrace_sgs(sgc, imsi, true, sgc->rx_stream, sgc->rx_tsn, payload, plen);
 	}
 
 	/* Some messages contain an MME-NAME as mandatory IE, parse it right here. The

@@ -30,6 +30,11 @@ struct ran_conn {
 	} vgcs;
 
 	bool closing;
+
+	/* API IP trace: IMSI once resolved, and packets held until then. */
+	char ipt_imsi[16];
+	struct llist_head ipt_pending;
+	unsigned int ipt_pending_n;
 };
 
 struct ran_conn *ran_conn_create_incoming(struct ran_peer *ran_peer, uint32_t sccp_conn_id);
